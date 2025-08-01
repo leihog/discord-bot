@@ -2,21 +2,26 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sync"
+	"syscall"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/fsnotify/fsnotify"
-	"github.com/yuin/gopher-lua"
+	lua "github.com/yuin/gopher-lua"
 )
 
 var (
-	session   *discordgo.Session
-	luaState  *lua.LState
-	hookMutex sync.Mutex
-	onMessageHooks []lua.LValue
+	session               *discordgo.Session
+	luaState              *lua.LState
+	hookMutex             sync.Mutex
+	onChannelMessageHooks []lua.LValue
+	onDirectMessageHooks  []lua.LValue
+	shutdownChan          chan os.Signal
 )
 
 func main() {
@@ -24,6 +29,14 @@ func main() {
 	if botToken == "" {
 		log.Fatal("DISCORD_BOT_TOKEN is not set")
 	}
+
+	// Set up signal handling for graceful shutdown
+	shutdownChan = make(chan os.Signal, 1)
+	signal.Notify(shutdownChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Create context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	var err error
 	session, err = discordgo.New("Bot " + botToken)
@@ -38,16 +51,30 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to open connection:", err)
 	}
-	defer session.Close()
 
 	luaState = lua.NewState()
-	defer luaState.Close()
 	registerLuaFunctions(luaState)
 	loadLuaScripts("lua/scripts")
-	watchLuaScripts("lua/scripts")
+	watchLuaScripts("lua/scripts", ctx)
 
 	log.Println("Bot is now running. Press CTRL+C to exit.")
-	select {}
+
+	// Wait for shutdown signal
+	<-shutdownChan
+	log.Println("Received shutdown signal. Gracefully shutting down...")
+
+	// Cancel context to stop file watcher
+	cancel()
+
+	// Close Discord session gracefully
+	if err := session.Close(); err != nil {
+		log.Println("Error closing Discord session:", err)
+	}
+
+	// Close Lua state
+	luaState.Close()
+
+	log.Println("Bot shutdown complete.")
 }
 
 func registerLuaFunctions(L *lua.LState) {
@@ -64,10 +91,15 @@ func registerLuaFunctions(L *lua.LState) {
 	L.SetGlobal("register_hook", L.NewFunction(func(L *lua.LState) int {
 		hookName := L.CheckString(1)
 		hookFunc := L.CheckFunction(2)
-		if hookName == "message_create" {
-			hookMutex.Lock()
-			defer hookMutex.Unlock()
-			onMessageHooks = append(onMessageHooks, hookFunc)
+		hookMutex.Lock()
+		defer hookMutex.Unlock()
+		switch hookName {
+		case "on_channel_message":
+			onChannelMessageHooks = append(onChannelMessageHooks, hookFunc)
+		case "on_direct_message":
+			onDirectMessageHooks = append(onDirectMessageHooks, hookFunc)
+		default:
+			log.Println("Unknown hook name:", hookName)
 		}
 		return 0
 	}))
@@ -81,11 +113,17 @@ func onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	data.RawSetString("content", lua.LString(m.Content))
 	data.RawSetString("channel_id", lua.LString(m.ChannelID))
 	data.RawSetString("author", lua.LString(m.Author.Username))
-	data.RawSetString("is_dm", lua.LBool(m.GuildID == ""))
 
 	hookMutex.Lock()
 	defer hookMutex.Unlock()
-	for _, fn := range onMessageHooks {
+	var hooks []lua.LValue
+	if m.GuildID == "" {
+		hooks = onDirectMessageHooks
+	} else {
+		hooks = onChannelMessageHooks
+	}
+
+	for _, fn := range hooks {
 		if err := luaState.CallByParam(lua.P{Fn: fn, NRet: 0, Protect: true}, data); err != nil {
 			log.Println("Lua hook error:", err)
 		}
@@ -99,7 +137,8 @@ func loadLuaScripts(dir string) {
 		return
 	}
 
-	onMessageHooks = nil
+	onChannelMessageHooks = nil
+	onDirectMessageHooks = nil
 
 	for _, f := range files {
 		if filepath.Ext(f.Name()) == ".lua" {
@@ -111,12 +150,14 @@ func loadLuaScripts(dir string) {
 	}
 }
 
-func watchLuaScripts(dir string) {
+func watchLuaScripts(dir string, ctx context.Context) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Println("File watcher error:", err)
 		return
 	}
+	defer watcher.Close()
+
 	go func() {
 		for {
 			select {
@@ -126,11 +167,14 @@ func watchLuaScripts(dir string) {
 					loadLuaScripts(dir)
 				}
 			case err := <-watcher.Errors:
-				log.Println("Watcher error:", err)
+				if err != nil {
+					log.Println("Watcher error:", err)
+				}
+			case <-ctx.Done():
+				log.Println("Stopping file watcher...")
+				return
 			}
 		}
 	}()
 	watcher.Add(dir)
 }
-
-
