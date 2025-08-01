@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"log"
 	"os"
 	"os/signal"
@@ -13,6 +15,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/fsnotify/fsnotify"
 	lua "github.com/yuin/gopher-lua"
+	_ "modernc.org/sqlite"
 )
 
 var (
@@ -22,6 +25,7 @@ var (
 	onChannelMessageHooks []lua.LValue
 	onDirectMessageHooks  []lua.LValue
 	shutdownChan          chan os.Signal
+	db                    *sql.DB
 )
 
 func main() {
@@ -50,6 +54,23 @@ func main() {
 	err = session.Open()
 	if err != nil {
 		log.Fatal("Failed to open connection:", err)
+	}
+
+	// Initialize SQLite database
+	db, err = sql.Open("sqlite", "bot_data.db")
+	if err != nil {
+		log.Fatal("Failed to open SQLite DB:", err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS kv_store (
+		namespace TEXT NOT NULL,
+		key TEXT NOT NULL,
+		value TEXT,
+		PRIMARY KEY (namespace, key)
+	)`)
+	if err != nil {
+		log.Fatal("Failed to create kv_store table:", err)
 	}
 
 	luaState = lua.NewState()
@@ -103,6 +124,109 @@ func registerLuaFunctions(L *lua.LState) {
 		}
 		return 0
 	}))
+
+	L.SetGlobal("store_set", L.NewFunction(luaStoreSet))
+	L.SetGlobal("store_get", L.NewFunction(luaStoreGet))
+	L.SetGlobal("store_delete", L.NewFunction(luaStoreDelete))
+}
+
+func luaStoreSet(L *lua.LState) int {
+	namespace := L.CheckString(1)
+	key := L.CheckString(2)
+	value := L.CheckAny(3)
+
+	var valStr string
+	if tbl, ok := value.(*lua.LTable); ok {
+		// Convert Lua table to Go map
+		goVal := luaTableToMap(tbl)
+		jsonBytes, err := json.Marshal(goVal)
+		if err != nil {
+			log.Println("Failed to serialize table:", err)
+			return 0
+		}
+		valStr = string(jsonBytes)
+	} else {
+		valStr = value.String()
+	}
+
+	_, err := db.Exec(`INSERT INTO kv_store(namespace, key, value) VALUES (?, ?, ?) 
+		ON CONFLICT(namespace, key) DO UPDATE SET value=excluded.value`, namespace, key, valStr)
+	if err != nil {
+		log.Println("store_set error:", err)
+	}
+	return 0
+}
+
+func luaStoreGet(L *lua.LState) int {
+	namespace := L.CheckString(1)
+	key := L.CheckString(2)
+
+	row := db.QueryRow(`SELECT value FROM kv_store WHERE namespace = ? AND key = ?`, namespace, key)
+	var valStr string
+	err := row.Scan(&valStr)
+	if err == sql.ErrNoRows {
+		L.Push(lua.LNil)
+		return 1
+	} else if err != nil {
+		log.Println("store_get error:", err)
+		L.Push(lua.LNil)
+		return 1
+	}
+
+	// Try to decode as JSON object
+	var decoded interface{}
+	if json.Unmarshal([]byte(valStr), &decoded) == nil {
+		L.Push(goValueToLua(L, decoded))
+	} else {
+		L.Push(lua.LString(valStr))
+	}
+	return 1
+}
+
+func luaStoreDelete(L *lua.LState) int {
+	namespace := L.CheckString(1)
+	key := L.CheckString(2)
+
+	_, err := db.Exec(`DELETE FROM kv_store WHERE namespace = ? AND key = ?`, namespace, key)
+	if err != nil {
+		log.Println("store_delete error:", err)
+	}
+	return 0
+}
+
+func luaTableToMap(tbl *lua.LTable) map[string]interface{} {
+	result := make(map[string]interface{})
+	tbl.ForEach(func(key lua.LValue, value lua.LValue) {
+		k := key.String()
+		switch v := value.(type) {
+		case *lua.LTable:
+			result[k] = luaTableToMap(v)
+		default:
+			result[k] = v.String()
+		}
+	})
+	return result
+}
+
+func goValueToLua(L *lua.LState, v interface{}) lua.LValue {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		tbl := L.NewTable()
+		for k, v2 := range val {
+			tbl.RawSetString(k, goValueToLua(L, v2))
+		}
+		return tbl
+	case string:
+		return lua.LString(val)
+	case float64:
+		return lua.LNumber(val)
+	case bool:
+		return lua.LBool(val)
+	case nil:
+		return lua.LNil
+	default:
+		return lua.LString("unsupported")
+	}
 }
 
 func onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
