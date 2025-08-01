@@ -73,4 +73,18 @@ func (e *Engine) registerFunctions() {
 		}
 		return 0
 	}))
+
+	// store_get_all function
+	e.state.SetGlobal("store_get_all", e.state.NewFunction(func(L *lua.LState) int {
+		namespace := L.CheckString(1)
+
+		value, err := e.StoreGetAll(namespace)
+		if err != nil {
+			log.Println("store_get_all error:", err)
+			L.Push(lua.LNil)
+		} else {
+			L.Push(value)
+		}
+		return 1
+	}))
 }

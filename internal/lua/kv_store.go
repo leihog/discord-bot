@@ -54,6 +54,38 @@ func (e *Engine) StoreDelete(namespace, key string) error {
 	return err
 }
 
+// StoreGetAll retrieves all values from a namespace
+func (e *Engine) StoreGetAll(namespace string) (lua.LValue, error) {
+	rows, err := e.db.Query(`SELECT key, value FROM kv_store WHERE namespace = ?`, namespace)
+	if err != nil {
+		return lua.LNil, err
+	}
+	defer rows.Close()
+
+	result := e.state.NewTable()
+
+	for rows.Next() {
+		var key, valStr string
+		if err := rows.Scan(&key, &valStr); err != nil {
+			return lua.LNil, err
+		}
+
+		// Try to decode as JSON object
+		var decoded any
+		if json.Unmarshal([]byte(valStr), &decoded) == nil {
+			result.RawSetString(key, goValueToLua(e.state, decoded))
+		} else {
+			result.RawSetString(key, lua.LString(valStr))
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return lua.LNil, err
+	}
+
+	return result, nil
+}
+
 // luaTableToMap converts a Lua table to a Go map
 func luaTableToMap(tbl *lua.LTable) map[string]any {
 	result := make(map[string]any)

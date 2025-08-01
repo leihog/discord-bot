@@ -50,6 +50,7 @@ go build -o discord-bot cmd/bot/main.go
 - `register_hook(hook_name, function)` - Register event handlers
 - `store_set(namespace, key, value)` - Store persistent data
 - `store_get(namespace, key)` - Retrieve persistent data
+- `store_get_all(namespace)` - Retrieve all data from a namespace
 - `store_delete(namespace, key)` - Delete persistent data
 
 ### Hook Types

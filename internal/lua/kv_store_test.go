@@ -188,3 +188,87 @@ func TestStoreGetNonExistent(t *testing.T) {
 		t.Errorf("Expected nil for non-existent key, got %v", value)
 	}
 }
+
+func TestStoreGetAll(t *testing.T) {
+	db := setupTestDB(t)
+	engine := New(db, nil)
+
+	// Store multiple values in the same namespace
+	err := engine.StoreSet("test_all", "key1", lua.LString("value1"))
+	if err != nil {
+		t.Fatalf("StoreSet failed: %v", err)
+	}
+
+	err = engine.StoreSet("test_all", "key2", lua.LString("value2"))
+	if err != nil {
+		t.Fatalf("StoreSet failed: %v", err)
+	}
+
+	// Store a table
+	L := lua.NewState()
+	defer L.Close()
+	table := L.NewTable()
+	table.RawSetString("name", lua.LString("test_table"))
+	table.RawSetString("value", lua.LNumber(42))
+
+	err = engine.StoreSet("test_all", "key3", table)
+	if err != nil {
+		t.Fatalf("StoreSet failed: %v", err)
+	}
+
+	// Get all values from the namespace
+	result, err := engine.StoreGetAll("test_all")
+	if err != nil {
+		t.Fatalf("StoreGetAll failed: %v", err)
+	}
+
+	// Check if the returned value is a table
+	if tbl, ok := result.(*lua.LTable); !ok {
+		t.Errorf("Expected table, got %T: %s", result, result.String())
+	} else {
+		// Check that all keys are present
+		if key1 := tbl.RawGetString("key1"); key1.String() != "value1" {
+			t.Errorf("Expected key1 'value1', got '%s'", key1.String())
+		}
+		if key2 := tbl.RawGetString("key2"); key2.String() != "value2" {
+			t.Errorf("Expected key2 'value2', got '%s'", key2.String())
+		}
+		if key3 := tbl.RawGetString("key3"); key3 == lua.LNil {
+			t.Error("Expected key3 to exist")
+		} else if key3Tbl, ok := key3.(*lua.LTable); ok {
+			if name := key3Tbl.RawGetString("name"); name.String() != "test_table" {
+				t.Errorf("Expected name 'test_table', got '%s'", name.String())
+			}
+			if value := key3Tbl.RawGetString("value"); value.String() != "42" {
+				t.Errorf("Expected value '42', got '%s'", value.String())
+			}
+		} else {
+			t.Errorf("Expected key3 to be a table, got %T", key3)
+		}
+	}
+}
+
+func TestStoreGetAllEmpty(t *testing.T) {
+	db := setupTestDB(t)
+	engine := New(db, nil)
+
+	// Get all values from an empty namespace
+	result, err := engine.StoreGetAll("empty_namespace")
+	if err != nil {
+		t.Fatalf("StoreGetAll failed: %v", err)
+	}
+
+	// Should return an empty table, not nil
+	if tbl, ok := result.(*lua.LTable); !ok {
+		t.Errorf("Expected table, got %T: %s", result, result.String())
+	} else {
+		// Check that the table is empty
+		count := 0
+		tbl.ForEach(func(key lua.LValue, value lua.LValue) {
+			count++
+		})
+		if count != 0 {
+			t.Errorf("Expected empty table, got %d items", count)
+		}
+	}
+}
