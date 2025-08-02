@@ -87,4 +87,69 @@ func (e *Engine) registerFunctions() {
 		}
 		return 1
 	}))
+
+	// http_get function
+	e.state.SetGlobal("http_get", e.state.NewFunction(func(L *lua.LState) int {
+		url := L.CheckString(1)
+		var options *lua.LTable
+		if L.GetTop() > 1 {
+			options = L.CheckTable(2)
+		}
+
+		result, err := e.httpGet(url, options)
+		if err != nil {
+			log.Println("http_get error:", err)
+			L.Push(lua.LNil)
+		} else {
+			L.Push(result)
+		}
+		return 1
+	}))
+
+	// http_post function
+	e.state.SetGlobal("http_post", e.state.NewFunction(func(L *lua.LState) int {
+		url := L.CheckString(1)
+		body := L.CheckString(2)
+		var options *lua.LTable
+		if L.GetTop() > 2 {
+			options = L.CheckTable(3)
+		}
+
+		result, err := e.httpPost(url, body, options)
+		if err != nil {
+			log.Println("http_post error:", err)
+			L.Push(lua.LNil)
+		} else {
+			L.Push(result)
+		}
+		return 1
+	}))
+
+	// json_encode function
+	e.state.SetGlobal("json_encode", e.state.NewFunction(func(L *lua.LState) int {
+		table := L.CheckTable(1)
+
+		result, err := e.jsonEncode(table)
+		if err != nil {
+			log.Println("json_encode error:", err)
+			L.Push(lua.LNil)
+		} else {
+			L.Push(result)
+		}
+		return 1
+	}))
+
+	// json_decode function
+	e.state.SetGlobal("json_decode", e.state.NewFunction(func(L *lua.LState) int {
+		jsonStr := L.CheckString(1)
+
+		result, err := e.jsonDecode(jsonStr)
+		if err != nil {
+			log.Println("json_decode error:", err)
+			L.Push(lua.LNil)
+		} else {
+			L.Push(result)
+		}
+		return 1
+	}))
 }
