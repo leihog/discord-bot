@@ -49,11 +49,35 @@ func (e *Engine) LoadScripts(dir string) {
 	e.onDirectMessageHooks = nil
 
 	for _, f := range files {
-		if filepath.Ext(f.Name()) == ".lua" {
-			scriptPath := filepath.Join(dir, f.Name())
-			if err := e.state.DoFile(scriptPath); err != nil {
-				log.Println("Failed to load script", f.Name(), ":", err)
-			}
+		if filepath.Ext(f.Name()) != ".lua" {
+			continue
+		}
+
+		scriptPath := filepath.Join(dir, f.Name())
+		code, err := os.ReadFile(scriptPath)
+		if err != nil {
+			log.Println("Failed to read script", f.Name(), ":", err)
+			continue
+		}
+
+		// Create a new environment for this script
+		env := e.state.NewTable()
+
+		mt := e.state.NewTable()
+		mt.RawSetString("__index", e.state.Get(lua.GlobalsIndex))
+		e.state.SetMetatable(env, mt)
+
+		// Load and run the script in its environment
+		fn, err := e.state.LoadString(string(code))
+		if err != nil {
+			log.Println("Failed to compile script", f.Name(), ":", err)
+			continue
+		}
+
+		e.state.Push(fn)
+		e.state.Push(env)
+		if err := e.state.PCall(1, lua.MultRet, nil); err != nil {
+			log.Println("Failed to run script", f.Name(), ":", err)
 		}
 	}
 }
