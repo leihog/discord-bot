@@ -1,6 +1,12 @@
+greeting_counter = 0
+
 function handle_message(event)
-  if event.content:lower() == "hej" then
+  if event.content:lower():match("^hej") then
     send_message(event.channel_id, "Hej, " .. event.author .. "!")
+    greeting_counter = greeting_counter + 1
+  
+  elseif event.content:match("^!greet_count") then
+    send_message(event.channel_id, "I've said hej " .. greeting_counter .. " times!")
   end
 end
 
