@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"context"
 	"log"
 	"os"
 	"path/filepath"
@@ -18,6 +19,13 @@ type HookInfo struct {
 	Script   string
 }
 
+// LuaEvent represents an event to be processed by the Lua engine
+type LuaEvent struct {
+	Hook      HookInfo
+	Data      lua.LValue
+	EventType string // "message", "timer", etc.
+}
+
 // Engine manages the Lua scripting environment
 type Engine struct {
 	state                 *lua.LState
@@ -27,20 +35,67 @@ type Engine struct {
 	onChannelMessageHooks []HookInfo
 	onDirectMessageHooks  []HookInfo
 	currentScript         string // Track the currently executing script
+
+	// Event queue system
+	eventQueue chan LuaEvent
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 // New creates a new Lua engine
 func New(db *database.DB, session *discordgo.Session) *Engine {
 	return &Engine{
-		state:   lua.NewState(),
-		db:      db,
-		session: session,
+		state:      lua.NewState(),
+		db:         db,
+		session:    session,
+		eventQueue: make(chan LuaEvent, 200), // Buffer for 200 events
 	}
 }
 
 // Initialize sets up the Lua engine with all functions
 func (e *Engine) Initialize() {
 	e.registerFunctions()
+}
+
+// Start starts the Lua event dispatcher
+func (e *Engine) Start(ctx context.Context) {
+	e.ctx, e.cancel = context.WithCancel(ctx)
+	go e.dispatcher()
+}
+
+// dispatcher runs the main Lua event processing loop
+func (e *Engine) dispatcher() {
+	for {
+		select {
+		case event := <-e.eventQueue:
+			e.processEvent(event)
+		case <-e.ctx.Done():
+			log.Println("Shutdown signal received, draining Lua event queue")
+			for {
+				select {
+				case event := <-e.eventQueue:
+					e.processEvent(event)
+				default:
+					log.Println("Lua event queue fully drained, shutting down")
+					return
+				}
+			}
+		}
+	}
+}
+
+// processEvent processes a single Lua event
+func (e *Engine) processEvent(event LuaEvent) {
+	// Set the current script for error reporting
+	e.currentScript = event.Hook.Script
+
+	// Execute the hook function
+	if err := e.state.CallByParam(lua.P{Fn: event.Hook.Function, NRet: 0, Protect: true}, event.Data); err != nil {
+		log.Printf("Lua hook error in script '%s': %v", event.Hook.Script, err)
+	}
+
+	// Clear the current script
+	e.currentScript = ""
 }
 
 // LoadScripts loads all Lua scripts from the given directory
@@ -116,17 +171,29 @@ func (e *Engine) ProcessMessage(m *discordgo.MessageCreate) {
 		hooks = e.onChannelMessageHooks
 	}
 
+	// Enqueue events instead of executing directly
 	for _, hook := range hooks {
-		e.currentScript = hook.Script // we set currentScript here in case register_hook is triggered by the executing hook function
-		if err := e.state.CallByParam(lua.P{Fn: hook.Function, NRet: 0, Protect: true}, data); err != nil {
-			log.Printf("Lua hook error in script '%s': %v", hook.Script, err)
+		event := LuaEvent{
+			Hook:      hook,
+			Data:      data,
+			EventType: "message",
 		}
-		e.currentScript = ""
+
+		select {
+		case e.eventQueue <- event:
+			// Event queued successfully
+		// case <-time.After(100 * time.Millisecond): // we could use this to drop events if the queue is still full after 100ms
+		default:
+			log.Printf("Warning: Lua event queue full, dropping event from script '%s'", hook.Script)
+		}
 	}
 }
 
 // Close closes the Lua engine
 func (e *Engine) Close() {
+	if e.cancel != nil {
+		e.cancel()
+	}
 	if e.state != nil {
 		e.state.Close()
 	}

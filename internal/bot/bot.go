@@ -70,6 +70,9 @@ func (b *Bot) Start(ctx context.Context) error {
 	// Load initial scripts
 	b.engine.LoadScripts(b.config.ScriptsDir)
 
+	// Start Lua engine dispatcher
+	b.engine.Start(ctx)
+
 	// Start file watcher
 	b.watcher.Start(ctx)
 
