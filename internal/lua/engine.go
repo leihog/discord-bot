@@ -40,16 +40,21 @@ type Engine struct {
 	eventQueue chan LuaEvent
 	ctx        context.Context
 	cancel     context.CancelFunc
+
+	// Timer system
+	timer *Timer
 }
 
 // New creates a new Lua engine
 func New(db *database.DB, session *discordgo.Session) *Engine {
-	return &Engine{
+	engine := &Engine{
 		state:      lua.NewState(),
 		db:         db,
 		session:    session,
 		eventQueue: make(chan LuaEvent, 200), // Buffer for 200 events
 	}
+	engine.timer = NewTimer(engine)
+	return engine
 }
 
 // Initialize sets up the Lua engine with all functions
@@ -193,6 +198,9 @@ func (e *Engine) ProcessMessage(m *discordgo.MessageCreate) {
 func (e *Engine) Close() {
 	if e.cancel != nil {
 		e.cancel()
+	}
+	if e.timer != nil {
+		e.timer.StopAll()
 	}
 	if e.state != nil {
 		e.state.Close()

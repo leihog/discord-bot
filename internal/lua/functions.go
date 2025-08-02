@@ -162,4 +162,47 @@ func (e *Engine) registerFunctions() {
 		}
 		return 1
 	}))
+
+	// register_timer function (one-shot timer)
+	e.state.SetGlobal("call_later", e.state.NewFunction(func(L *lua.LState) int {
+		seconds := L.CheckNumber(1)
+		callback := L.CheckFunction(2)
+		var data lua.LValue = lua.LNil
+		if L.GetTop() > 2 {
+			data = L.CheckAny(3)
+		}
+
+		// Get the current script name
+		scriptName := e.currentScript
+
+		timerID := e.timer.RegisterTimer(float64(seconds), callback, data, scriptName)
+		L.Push(lua.LString(timerID))
+		return 1
+	}))
+
+	// register_repeating_timer function
+	e.state.SetGlobal("register_timer", e.state.NewFunction(func(L *lua.LState) int {
+		seconds := L.CheckNumber(1)
+		callback := L.CheckFunction(2)
+		var data lua.LValue = lua.LNil
+		if L.GetTop() > 2 {
+			data = L.CheckAny(3)
+		}
+
+		// Get the current script name
+		scriptName := e.currentScript
+
+		timerID := e.timer.RegisterRepeatingTimer(float64(seconds), callback, data, scriptName)
+		L.Push(lua.LString(timerID))
+		return 1
+	}))
+
+	// unregister_timer function
+	e.state.SetGlobal("unregister_timer", e.state.NewFunction(func(L *lua.LState) int {
+		timerID := L.CheckString(1)
+
+		success := e.timer.UnregisterTimer(timerID)
+		L.Push(lua.LBool(success))
+		return 1
+	}))
 }
