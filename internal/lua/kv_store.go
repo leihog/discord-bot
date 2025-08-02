@@ -110,6 +110,12 @@ func goValueToLua(L *lua.LState, v any) lua.LValue {
 			tbl.RawSetString(k, goValueToLua(L, v2))
 		}
 		return tbl
+	case []any:
+		tbl := L.NewTable()
+		for i, v2 := range val {
+			tbl.RawSetInt(i+1, goValueToLua(L, v2))
+		}
+		return tbl
 	case string:
 		return lua.LString(val)
 	case float64:

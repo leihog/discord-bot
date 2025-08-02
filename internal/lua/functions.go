@@ -23,13 +23,23 @@ func (e *Engine) registerFunctions() {
 	e.state.SetGlobal("register_hook", e.state.NewFunction(func(L *lua.LState) int {
 		hookName := L.CheckString(1)
 		hookFunc := L.CheckFunction(2)
+
+		// Get the current script name
+		scriptName := e.currentScript
+
 		e.hookMutex.Lock()
 		defer e.hookMutex.Unlock()
 		switch hookName {
 		case "on_channel_message":
-			e.onChannelMessageHooks = append(e.onChannelMessageHooks, hookFunc)
+			e.onChannelMessageHooks = append(e.onChannelMessageHooks, HookInfo{
+				Function: hookFunc,
+				Script:   scriptName,
+			})
 		case "on_direct_message":
-			e.onDirectMessageHooks = append(e.onDirectMessageHooks, hookFunc)
+			e.onDirectMessageHooks = append(e.onDirectMessageHooks, HookInfo{
+				Function: hookFunc,
+				Script:   scriptName,
+			})
 		default:
 			log.Println("Unknown hook name:", hookName)
 		}

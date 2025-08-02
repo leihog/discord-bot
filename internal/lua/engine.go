@@ -12,14 +12,21 @@ import (
 	"github.com/leihog/discord-bot/internal/database"
 )
 
+// HookInfo contains information about a registered hook
+type HookInfo struct {
+	Function lua.LValue
+	Script   string
+}
+
 // Engine manages the Lua scripting environment
 type Engine struct {
 	state                 *lua.LState
 	db                    *database.DB
 	session               *discordgo.Session
 	hookMutex             sync.Mutex
-	onChannelMessageHooks []lua.LValue
-	onDirectMessageHooks  []lua.LValue
+	onChannelMessageHooks []HookInfo
+	onDirectMessageHooks  []HookInfo
+	currentScript         string // Track the currently executing script
 }
 
 // New creates a new Lua engine
@@ -74,11 +81,17 @@ func (e *Engine) LoadScripts(dir string) {
 			continue
 		}
 
+		// Track the current script being executed
+		e.currentScript = f.Name()
+
 		e.state.Push(fn)
 		e.state.Push(env)
 		if err := e.state.PCall(1, lua.MultRet, nil); err != nil {
 			log.Println("Failed to run script", f.Name(), ":", err)
 		}
+
+		// Clear the current script after execution
+		e.currentScript = ""
 	}
 }
 
@@ -96,17 +109,19 @@ func (e *Engine) ProcessMessage(m *discordgo.MessageCreate) {
 	e.hookMutex.Lock()
 	defer e.hookMutex.Unlock()
 
-	var hooks []lua.LValue
+	var hooks []HookInfo
 	if m.GuildID == "" {
 		hooks = e.onDirectMessageHooks
 	} else {
 		hooks = e.onChannelMessageHooks
 	}
 
-	for _, fn := range hooks {
-		if err := e.state.CallByParam(lua.P{Fn: fn, NRet: 0, Protect: true}, data); err != nil {
-			log.Println("Lua hook error:", err)
+	for _, hook := range hooks {
+		e.currentScript = hook.Script // we set currentScript here in case register_hook is triggered by the executing hook function
+		if err := e.state.CallByParam(lua.P{Fn: hook.Function, NRet: 0, Protect: true}, data); err != nil {
+			log.Printf("Lua hook error in script '%s': %v", hook.Script, err)
 		}
+		e.currentScript = ""
 	}
 }
 

@@ -212,6 +212,69 @@ func TestJsonDecodeInvalid(t *testing.T) {
 	}
 }
 
+func TestJsonDecodeWithArrays(t *testing.T) {
+	db := setupTestDB(t)
+	engine := New(db, nil)
+
+	// Test JSON with arrays
+	jsonString := `{"name":"Bob","age":25,"skills":["python","javascript"],"numbers":[1,2,3]}`
+	result, err := engine.jsonDecode(jsonString)
+	if err != nil {
+		t.Fatalf("jsonDecode failed: %v", err)
+	}
+
+	if result == lua.LNil {
+		t.Fatal("Expected result, got nil")
+	}
+
+	if tbl, ok := result.(*lua.LTable); !ok {
+		t.Errorf("Expected table, got %T", result)
+	} else {
+		// Check basic fields
+		if name := tbl.RawGetString("name"); name.String() != "Bob" {
+			t.Errorf("Expected name 'Bob', got '%s'", name.String())
+		}
+		if age := tbl.RawGetString("age"); age.String() != "25" {
+			t.Errorf("Expected age '25', got '%s'", age.String())
+		}
+
+		// Check skills array
+		if skills := tbl.RawGetString("skills"); skills != lua.LNil {
+			if skillsTbl, ok := skills.(*lua.LTable); ok {
+				if skill1 := skillsTbl.RawGetInt(1); skill1.String() != "python" {
+					t.Errorf("Expected skill1 'python', got '%s'", skill1.String())
+				}
+				if skill2 := skillsTbl.RawGetInt(2); skill2.String() != "javascript" {
+					t.Errorf("Expected skill2 'javascript', got '%s'", skill2.String())
+				}
+			} else {
+				t.Errorf("Expected skills to be a table, got %T", skills)
+			}
+		} else {
+			t.Error("Expected skills to exist")
+		}
+
+		// Check numbers array
+		if numbers := tbl.RawGetString("numbers"); numbers != lua.LNil {
+			if numbersTbl, ok := numbers.(*lua.LTable); ok {
+				if num1 := numbersTbl.RawGetInt(1); num1.String() != "1" {
+					t.Errorf("Expected num1 '1', got '%s'", num1.String())
+				}
+				if num2 := numbersTbl.RawGetInt(2); num2.String() != "2" {
+					t.Errorf("Expected num2 '2', got '%s'", num2.String())
+				}
+				if num3 := numbersTbl.RawGetInt(3); num3.String() != "3" {
+					t.Errorf("Expected num3 '3', got '%s'", num3.String())
+				}
+			} else {
+				t.Errorf("Expected numbers to be a table, got %T", numbers)
+			}
+		} else {
+			t.Error("Expected numbers to exist")
+		}
+	}
+}
+
 // Helper function to check if a string contains a substring
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr ||
