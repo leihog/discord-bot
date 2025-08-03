@@ -2,6 +2,8 @@ package lua
 
 import (
 	"log"
+	"strings"
+	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -17,6 +19,70 @@ func (e *Engine) registerFunctions() {
 			log.Println("send_message error:", err)
 		}
 		return 0
+	}))
+
+	// register_command function
+	e.state.SetGlobal("register_command", e.state.NewFunction(func(L *lua.LState) int {
+		commandName := L.CheckString(1)
+		commandDescription := L.CheckString(2)
+		commandCallback := L.CheckFunction(3)
+		commandCooldown := time.Duration(0) // default is no cooldown
+		if L.GetTop() >= 4 {
+			commandCooldown = time.Duration(L.CheckNumber(4)) * time.Second
+		}
+
+		// Validate command name
+		if commandName == "" {
+			log.Println("Error: Command name cannot be empty")
+			return 0
+		}
+
+		// Check for invalid characters in command name
+		if strings.ContainsAny(commandName, " \t\n\r") {
+			log.Printf("Error: Command name '%s' contains invalid characters", commandName)
+			return 0
+		}
+
+		e.cmdMutex.Lock()
+		defer e.cmdMutex.Unlock()
+
+		if existingCommand, exists := e.commands[commandName]; exists {
+			log.Printf("Command '%s' already registered by script '%s'", commandName, existingCommand.Callback.Script)
+			return 0
+		}
+
+		e.commands[commandName] = &Command{
+			Name:        commandName,
+			Description: commandDescription,
+			Callback: HookInfo{
+				Function: commandCallback,
+				Script:   e.currentScript,
+			},
+			Cooldown: commandCooldown,
+			LastUsed: time.Time{}, // Zero time for initial state
+		}
+
+		log.Printf("Command '%s' registered by script '%s'", commandName, e.currentScript)
+		return 0
+	}))
+
+	// get_commands function
+	e.state.SetGlobal("get_commands", e.state.NewFunction(func(L *lua.LState) int {
+		e.cmdMutex.Lock()
+		defer e.cmdMutex.Unlock()
+
+		commandsTable := L.NewTable()
+		for name, cmd := range e.commands {
+			cmdTable := L.NewTable()
+			cmdTable.RawSetString("name", lua.LString(cmd.Name))
+			cmdTable.RawSetString("description", lua.LString(cmd.Description))
+			cmdTable.RawSetString("script", lua.LString(cmd.Callback.Script))
+			cmdTable.RawSetString("cooldown", lua.LNumber(cmd.Cooldown.Seconds()))
+			commandsTable.RawSetString(name, cmdTable)
+		}
+
+		L.Push(commandsTable)
+		return 1
 	}))
 
 	// register_hook function

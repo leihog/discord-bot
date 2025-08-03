@@ -5,7 +5,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	lua "github.com/yuin/gopher-lua"
@@ -26,6 +28,16 @@ type LuaEvent struct {
 	EventType string // "message", "timer", etc.
 }
 
+// Command represents a scripted Bot command
+type Command struct {
+	Name          string
+	Description   string
+	Callback      HookInfo
+	Cooldown      time.Duration
+	LastUsed      time.Time // Global cooldown for the command
+	lastUsedMutex sync.RWMutex
+}
+
 // Engine manages the Lua scripting environment
 type Engine struct {
 	state                 *lua.LState
@@ -43,6 +55,10 @@ type Engine struct {
 
 	// Timer system
 	timer *Timer
+
+	// Command system
+	commands map[string]*Command
+	cmdMutex sync.Mutex
 }
 
 // New creates a new Lua engine
@@ -52,6 +68,7 @@ func New(db *database.DB, session *discordgo.Session) *Engine {
 		db:         db,
 		session:    session,
 		eventQueue: make(chan LuaEvent, 200), // Buffer for 200 events
+		commands:   make(map[string]*Command),
 	}
 	engine.timer = NewTimer(engine)
 	return engine
@@ -112,8 +129,16 @@ func (e *Engine) LoadScripts(dir string) {
 	}
 
 	// Clear existing hooks
+	e.hookMutex.Lock()
+	// reusing the slices by using e.onChannelMessageHooks[:0] might be slightly more performant when the scripts are reloaded often
+	// but now while the hooks are changing so much this is more performant since the memory is freed.
 	e.onChannelMessageHooks = nil
 	e.onDirectMessageHooks = nil
+	e.hookMutex.Unlock()
+
+	e.cmdMutex.Lock()
+	e.commands = make(map[string]*Command)
+	e.cmdMutex.Unlock()
 
 	for _, f := range files {
 		if filepath.Ext(f.Name()) != ".lua" {
@@ -155,12 +180,18 @@ func (e *Engine) LoadScripts(dir string) {
 	}
 }
 
-// ProcessMessage processes a Discord message through all registered hooks
-func (e *Engine) ProcessMessage(m *discordgo.MessageCreate) {
-	if m.Author.Bot {
-		return
+func (e *Engine) enqueueLuaEvent(event LuaEvent, source string) {
+	select {
+	case e.eventQueue <- event:
+		// Event queued successfully
+	// todo test using timeout
+	// case <-time.After(100 * time.Millisecond): // we could use this to drop events if the queue is still full after 100ms
+	default:
+		log.Printf("Warning: Lua event queue full, dropping %s event from '%s'", event.EventType, source)
 	}
+}
 
+func (e *Engine) enqueueMessageHooks(m *discordgo.MessageCreate) {
 	data := e.state.NewTable()
 	data.RawSetString("content", lua.LString(m.Content))
 	data.RawSetString("channel_id", lua.LString(m.ChannelID))
@@ -184,14 +215,69 @@ func (e *Engine) ProcessMessage(m *discordgo.MessageCreate) {
 			EventType: "message",
 		}
 
-		select {
-		case e.eventQueue <- event:
-			// Event queued successfully
-		// case <-time.After(100 * time.Millisecond): // we could use this to drop events if the queue is still full after 100ms
-		default:
-			log.Printf("Warning: Lua event queue full, dropping event from script '%s'", hook.Script)
+		e.enqueueLuaEvent(event, hook.Script)
+	}
+}
+
+func (e *Engine) tryHandleCommand(content string, m *discordgo.MessageCreate) bool {
+	parts := strings.Fields(content)
+	commandName := strings.TrimPrefix(parts[0], "!")
+
+	e.cmdMutex.Lock()
+	cmd, exists := e.commands[commandName]
+	e.cmdMutex.Unlock()
+	if !exists {
+		return false
+	}
+
+	cmd.lastUsedMutex.RLock()
+	lastUsed := cmd.LastUsed
+	cmd.lastUsedMutex.RUnlock()
+
+	if time.Since(lastUsed) < cmd.Cooldown {
+		log.Printf("Command '%s' on cooldown", commandName)
+		return true
+	}
+
+	cmd.lastUsedMutex.Lock()
+	cmd.LastUsed = time.Now()
+	cmd.lastUsedMutex.Unlock()
+
+	args := e.state.NewTable()
+	for i, arg := range parts {
+		args.RawSetInt(i+1, lua.LString(arg))
+	}
+
+	data := e.state.NewTable()
+	data.RawSetString("args", args)
+	data.RawSetString("channel_id", lua.LString(m.ChannelID))
+	data.RawSetString("author", lua.LString(m.Author.Username))
+
+	event := LuaEvent{
+		Hook:      cmd.Callback,
+		Data:      data,
+		EventType: "command",
+	}
+
+	e.enqueueLuaEvent(event, m.Author.Username)
+	return true
+}
+
+// ProcessMessage processes a Discord message through all registered hooks
+func (e *Engine) ProcessMessage(m *discordgo.MessageCreate) {
+	if m.Author.Bot {
+		return
+	}
+
+	// Check for commands
+	content := strings.TrimSpace(m.Content)
+	if strings.HasPrefix(content, "!") {
+		if e.tryHandleCommand(content, m) {
+			return
 		}
 	}
+
+	e.enqueueMessageHooks(m)
 }
 
 // Close closes the Lua engine
