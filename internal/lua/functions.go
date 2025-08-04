@@ -106,6 +106,11 @@ func (e *Engine) registerFunctions() {
 				Function: hookFunc,
 				Script:   scriptName,
 			})
+		case "on_shutdown":
+			e.onShutdownHooks = append(e.onShutdownHooks, HookInfo{
+				Function: hookFunc,
+				Script:   scriptName,
+			})
 		default:
 			log.Println("Unknown hook name:", hookName)
 		}
@@ -227,6 +232,13 @@ func (e *Engine) registerFunctions() {
 			L.Push(result)
 		}
 		return 1
+	}))
+
+	// log function
+	e.state.SetGlobal("log", e.state.NewFunction(func(L *lua.LState) int {
+		message := L.CheckString(1)
+		log.Printf("[Lua Script] %s", message)
+		return 0
 	}))
 
 	// register_timer function (one-shot timer)

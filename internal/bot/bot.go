@@ -84,13 +84,13 @@ func (b *Bot) Start(ctx context.Context) error {
 func (b *Bot) Stop() error {
 	log.Println("Received shutdown signal. Gracefully shutting down...")
 
+	// Close Lua engine
+	b.engine.Close()
+
 	// Close Discord session
 	if err := b.session.Close(); err != nil {
 		log.Println("Error closing Discord session:", err)
 	}
-
-	// Close Lua engine
-	b.engine.Close()
 
 	// Close database
 	if err := b.db.Close(); err != nil {

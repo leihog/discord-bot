@@ -61,6 +61,7 @@ go build -o discord-bot cmd/bot/main.go
 - `http_post(url, body, options)` - Perform HTTP POST request
 - `json_encode(table)` - Convert Lua table to JSON string
 - `json_decode(string)` - Convert JSON string to Lua table
+- `log(message)` - Log a message to the bot's console
 - `call_later(seconds, callback, data)` - Register a one-shot timer callback
 - `register_timer(seconds, callback, data)` - Register a repeating timer callback
 - `unregister_timer(timer_id)` - Cancel a registered timer
@@ -163,6 +164,7 @@ register_command("weather", "Get weather for a city", handle_weather, 60)
 
 - `on_channel_message` - Triggered for messages in channels
 - `on_direct_message` - Triggered for direct messages
+- `on_shutdown` - Triggered when the bot is shutting down gracefully
 
 ### Event Queue Architecture
 

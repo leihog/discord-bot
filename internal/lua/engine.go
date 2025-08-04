@@ -46,12 +46,14 @@ type Engine struct {
 	hookMutex             sync.Mutex
 	onChannelMessageHooks []HookInfo
 	onDirectMessageHooks  []HookInfo
+	onShutdownHooks       []HookInfo
 	currentScript         string // Track the currently executing script
 
 	// Event queue system
-	eventQueue chan LuaEvent
-	ctx        context.Context
-	cancel     context.CancelFunc
+	eventQueue   chan LuaEvent
+	ctx          context.Context
+	cancel       context.CancelFunc
+	dispatcherWg sync.WaitGroup
 
 	// Timer system
 	timer *Timer
@@ -59,6 +61,10 @@ type Engine struct {
 	// Command system
 	commands map[string]*Command
 	cmdMutex sync.Mutex
+
+	// Shutdown state
+	shutdownMutex  sync.RWMutex
+	isShuttingDown bool
 }
 
 // New creates a new Lua engine
@@ -82,28 +88,19 @@ func (e *Engine) Initialize() {
 // Start starts the Lua event dispatcher
 func (e *Engine) Start(ctx context.Context) {
 	e.ctx, e.cancel = context.WithCancel(ctx)
+	e.dispatcherWg.Add(1)
 	go e.dispatcher()
 }
 
 // dispatcher runs the main Lua event processing loop
 func (e *Engine) dispatcher() {
-	for {
-		select {
-		case event := <-e.eventQueue:
-			e.processEvent(event)
-		case <-e.ctx.Done():
-			log.Println("Shutdown signal received, draining Lua event queue")
-			for {
-				select {
-				case event := <-e.eventQueue:
-					e.processEvent(event)
-				default:
-					log.Println("Lua event queue fully drained, shutting down")
-					return
-				}
-			}
-		}
+	defer e.dispatcherWg.Done()
+
+	for event := range e.eventQueue {
+		e.processEvent(event)
 	}
+
+	log.Println("Lua event queue closed and drained")
 }
 
 // processEvent processes a single Lua event
@@ -134,6 +131,7 @@ func (e *Engine) LoadScripts(dir string) {
 	// but now while the hooks are changing so much this is more performant since the memory is freed.
 	e.onChannelMessageHooks = nil
 	e.onDirectMessageHooks = nil
+	e.onShutdownHooks = nil
 	e.hookMutex.Unlock()
 
 	e.cmdMutex.Lock()
@@ -181,6 +179,15 @@ func (e *Engine) LoadScripts(dir string) {
 }
 
 func (e *Engine) enqueueLuaEvent(event LuaEvent, source string) {
+	// Check if we're shutting down and this isn't a shutdown event
+	e.shutdownMutex.RLock()
+	if e.isShuttingDown && event.EventType != "shutdown" {
+		e.shutdownMutex.RUnlock()
+		log.Printf("Dropping %s event from '%s' - engine is shutting down", event.EventType, source)
+		return
+	}
+	e.shutdownMutex.RUnlock()
+
 	select {
 	case e.eventQueue <- event:
 		// Event queued successfully
@@ -265,6 +272,11 @@ func (e *Engine) tryHandleCommand(content string, m *discordgo.MessageCreate) bo
 
 // ProcessMessage processes a Discord message through all registered hooks
 func (e *Engine) ProcessMessage(m *discordgo.MessageCreate) {
+	// Check if we're shutting down
+	if e.IsShuttingDown() {
+		return
+	}
+
 	if m.Author.Bot {
 		return
 	}
@@ -282,13 +294,46 @@ func (e *Engine) ProcessMessage(m *discordgo.MessageCreate) {
 
 // Close closes the Lua engine
 func (e *Engine) Close() {
-	if e.cancel != nil {
-		e.cancel()
-	}
+	e.shutdownMutex.Lock()
+	e.isShuttingDown = true
+	e.shutdownMutex.Unlock()
+
+	// Timers create events, so we need to stop them first
 	if e.timer != nil {
 		e.timer.StopAll()
 	}
+
+	log.Println("Triggering shutdown events in Lua scripts...")
+
+	// Create shutdown event data
+	data := e.state.NewTable()
+	data.RawSetString("reason", lua.LString("graceful_shutdown"))
+
+	// Trigger shutdown hooks
+	e.hookMutex.Lock()
+	for _, hook := range e.onShutdownHooks {
+		event := LuaEvent{
+			Hook:      hook,
+			Data:      data,
+			EventType: "shutdown",
+		}
+		e.enqueueLuaEvent(event, hook.Script)
+	}
+	e.hookMutex.Unlock()
+
+	log.Println("Shutdown events queued, waiting for event queue to drain...")
+
+	close(e.eventQueue) // stop accepting new events and drain the queue
+	e.dispatcherWg.Wait()
+
 	if e.state != nil {
 		e.state.Close()
 	}
+}
+
+// IsShuttingDown returns true if the engine is in shutdown mode
+func (e *Engine) IsShuttingDown() bool {
+	e.shutdownMutex.RLock()
+	defer e.shutdownMutex.RUnlock()
+	return e.isShuttingDown
 }
