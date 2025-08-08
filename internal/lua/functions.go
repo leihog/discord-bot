@@ -10,6 +10,42 @@ import (
 
 // registerFunctions registers all available functions with the Lua state
 func (e *Engine) registerFunctions() {
+	// get_calendar_week returns the year and week number of the current week
+	// if a timestamp is provided, it returns the year and week number of the week that contains the timestamp
+	// Week 1 starts on January 1st, so the first week of the year has less than 7 days.
+	// Week 2 starts on the first Monday of the year.
+	// This behavior is different than that of the standard time.ISOWeek() function.
+	e.state.SetGlobal("get_calendar_week", e.state.NewFunction(func(L *lua.LState) int {
+		var t time.Time
+		if L.GetTop() == 1 {
+			ts := L.CheckInt64(1)
+			t = time.Unix(ts, 0)
+		} else {
+			t = time.Now()
+		}
+
+		year := t.Year()
+		jan1 := time.Date(year, 1, 1, 0, 0, 0, 0, t.Location())
+
+		// Find first Monday
+		firstMonday := jan1
+		for firstMonday.Weekday() != time.Monday {
+			firstMonday = firstMonday.AddDate(0, 0, 1)
+		}
+
+		var week int
+		if t.Before(firstMonday) {
+			week = 1
+		} else {
+			days := int(t.Sub(firstMonday).Hours()) / 24
+			week = 2 + days/7
+		}
+
+		L.Push(lua.LNumber(year))
+		L.Push(lua.LNumber(week))
+		return 2
+	}))
+
 	// send_message function
 	e.state.SetGlobal("send_message", e.state.NewFunction(func(L *lua.LState) int {
 		channelID := L.CheckString(1)
