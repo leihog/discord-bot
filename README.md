@@ -152,55 +152,29 @@ end
 register_command("weather", "Get weather for a city", handle_weather, 60)
 ```
 
-#### Command Features
+### Bot events (hooks)
 
-- **Unique Registration**: Only one script can register each command name
-- **Global Cooldowns**: Cooldowns apply globally to prevent abuse from multiple users
-- **Argument Parsing**: Command arguments are automatically parsed and available in `event.args`
-- **Thread Safety**: Commands are processed through the same event queue as other Lua events
-- **Hot Reloading**: Commands are automatically re-registered when scripts are reloaded
-
-### Hook Types
+Outside of getting triggered by commands, scripts can also trigger on various Bot events
 
 - `on_channel_message` - Triggered for messages in channels
 - `on_direct_message` - Triggered for direct messages
 - `on_shutdown` - Triggered when the bot is shutting down gracefully
+- `on_unload`- Triggered when the script is unloaded
 
-### Event Queue Architecture
-
-The Lua engine uses a single-threaded event queue system to ensure thread safety:
-
-- **Event Queue**: All Lua execution goes through a buffered channel (`LuaEvent`)
-- **Dispatcher**: A dedicated goroutine processes events sequentially
-- **State Safety**: Only one Lua function executes at a time on the main `*lua.LState`
-- **Graceful Shutdown**: The dispatcher stops cleanly when the bot shuts down
-- **Timer System**: Timers are executed through the same event queue for consistency
-
-This architecture prevents race conditions and makes the system more predictable and debuggable.
-
-### Example Scripts
+### Example Script
 
 ```lua
--- Simple echo bot
 register_hook("on_channel_message", function(event)
-    if event.content == "!ping" then
+    if event.content == "ping" then
         send_message(event.channel_id, "Pong!")
     end
 end)
-
--- HTTP API example
-register_hook("on_channel_message", function(event)
-    if event.content == "!weather" then
-        local response = http_get("https://api.example.com/weather", {
-            headers = {["Accept"] = "application/json"},
-            timeout = 5
-        })
-        if response and response.status == 200 then
-            send_message(event.channel_id, "Weather: " .. response.body)
-        end
-    end
-end)
 ```
+
+### Notes and considerations
+
+- On bot shutdown, all queued timers are cleared without firing.
+- Trying to register new timers during shutdown or while the active script is unloading will result in error. 
 
 ## Configuration
 

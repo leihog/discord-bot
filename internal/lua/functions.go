@@ -62,7 +62,9 @@ func (e *Engine) registerFunctions() {
 			LastUsed: time.Time{}, // Zero time for initial state
 		}
 
-		log.Printf("Command '%s' registered by script '%s'", commandName, e.currentScript)
+		e.currentScript.Commands = append(e.currentScript.Commands, commandName)
+
+		log.Printf("Command '%s' registered by script '%s'", commandName, e.currentScript.Name)
 		return 0
 	}))
 
@@ -76,7 +78,7 @@ func (e *Engine) registerFunctions() {
 			cmdTable := L.NewTable()
 			cmdTable.RawSetString("name", lua.LString(cmd.Name))
 			cmdTable.RawSetString("description", lua.LString(cmd.Description))
-			cmdTable.RawSetString("script", lua.LString(cmd.Callback.Script))
+			cmdTable.RawSetString("script", lua.LString(cmd.Callback.Script.Name))
 			cmdTable.RawSetString("cooldown", lua.LNumber(cmd.Cooldown.Seconds()))
 			commandsTable.RawSetString(name, cmdTable)
 		}
@@ -90,27 +92,17 @@ func (e *Engine) registerFunctions() {
 		hookName := L.CheckString(1)
 		hookFunc := L.CheckFunction(2)
 
-		// Get the current script name
-		scriptName := e.currentScript
-
 		e.hookMutex.Lock()
 		defer e.hookMutex.Unlock()
+
 		switch hookName {
-		case "on_channel_message":
-			e.onChannelMessageHooks = append(e.onChannelMessageHooks, HookInfo{
+		case "on_channel_message", "on_direct_message", "on_shutdown":
+			e.hooks[hookName] = append(e.hooks[hookName], HookInfo{
 				Function: hookFunc,
-				Script:   scriptName,
+				Script:   e.currentScript,
 			})
-		case "on_direct_message":
-			e.onDirectMessageHooks = append(e.onDirectMessageHooks, HookInfo{
-				Function: hookFunc,
-				Script:   scriptName,
-			})
-		case "on_shutdown":
-			e.onShutdownHooks = append(e.onShutdownHooks, HookInfo{
-				Function: hookFunc,
-				Script:   scriptName,
-			})
+		case "on_unload":
+			e.currentScript.OnUnload = hookFunc
 		default:
 			log.Println("Unknown hook name:", hookName)
 		}
@@ -267,10 +259,7 @@ func (e *Engine) registerFunctions() {
 			data = L.CheckAny(3)
 		}
 
-		// Get the current script name
-		scriptName := e.currentScript
-
-		timerID := e.timer.RegisterRepeatingTimer(float64(seconds), callback, data, scriptName)
+		timerID := e.timer.RegisterRepeatingTimer(float64(seconds), callback, data, e.currentScript)
 		L.Push(lua.LString(timerID))
 		return 1
 	}))

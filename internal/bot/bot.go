@@ -60,7 +60,7 @@ func (b *Bot) Start(ctx context.Context) error {
 	b.session.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuilds | discordgo.IntentsDirectMessages
 
 	// Add message handler
-	b.session.AddHandler(b.onMessageCreate)
+	b.session.AddHandler(b.onMessageCreate) // toso this should be done after LuaEngine is started
 
 	// Open Discord connection
 	if err := b.session.Open(); err != nil {
@@ -68,7 +68,7 @@ func (b *Bot) Start(ctx context.Context) error {
 	}
 
 	// Load initial scripts
-	b.engine.LoadScripts(b.config.ScriptsDir)
+	b.engine.LoadScripts(b.config.ScriptsDir) // todo: this could be done in Initialize or Start
 
 	// Start Lua engine dispatcher
 	b.engine.Start(ctx)

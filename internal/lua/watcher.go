@@ -3,7 +3,6 @@ package lua
 import (
 	"context"
 	"log"
-	"path/filepath"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -29,16 +28,37 @@ func (w *Watcher) Start(ctx context.Context) {
 		log.Println("File watcher error:", err)
 		return
 	}
-	defer watcher.Close()
 
 	go func() {
+		defer watcher.Close()
+
 		for {
 			select {
-			case event := <-watcher.Events:
-				if filepath.Ext(event.Name) == ".lua" && (event.Op&fsnotify.Write != 0 || event.Op&fsnotify.Create != 0) {
-					log.Println("Reloading scripts due to change:", event.Name)
-					w.engine.LoadScripts(w.dir)
+			case event, ok := <-watcher.Events:
+				if !ok {
+					log.Println("Script watcher closed")
+					return
 				}
+
+				// todo: handle removed/deleted files
+
+				log.Println("File watcher event:", event)
+				if event.Has(fsnotify.Write) {
+					log.Println("Reloading script due to change:", event.Name)
+					event := ScriptEvent{
+						ScriptName: event.Name,
+						Action:     "reload",
+					}
+					w.engine.enqueueEvent(event, "watcher")
+				} else if event.Has(fsnotify.Create) {
+					log.Println("New script detected:", event.Name)
+					event := ScriptEvent{
+						ScriptName: event.Name,
+						Action:     "load",
+					}
+					w.engine.enqueueEvent(event, "watcher")
+				}
+
 			case err := <-watcher.Errors:
 				if err != nil {
 					log.Println("Watcher error:", err)

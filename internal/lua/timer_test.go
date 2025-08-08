@@ -8,6 +8,13 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
+func setupTestScript(t *testing.T) *LuaScript {
+	script := &LuaScript{
+		Name: "test_script.lua",
+	}
+	return script
+}
+
 func TestTimerRegistration(t *testing.T) {
 	db := setupTestDB(t)
 	engine := New(db, nil)
@@ -20,8 +27,10 @@ func TestTimerRegistration(t *testing.T) {
 		return 0
 	})
 
+	script := setupTestScript(t)
+
 	// Register a timer
-	timerID := timer.RegisterTimer(1.0, callback, lua.LNil, "test_script.lua")
+	timerID := timer.RegisterTimer(1.0, callback, lua.LNil, script)
 
 	if timerID == "" {
 		t.Fatal("Expected timer ID, got empty string")
@@ -47,6 +56,8 @@ func TestTimerUnregistration(t *testing.T) {
 	engine := New(db, nil)
 	timer := NewTimer(engine)
 
+	script := setupTestScript(t)
+
 	// Create a test callback
 	L := lua.NewState()
 	defer L.Close()
@@ -55,7 +66,7 @@ func TestTimerUnregistration(t *testing.T) {
 	})
 
 	// Register a timer
-	timerID := timer.RegisterTimer(10.0, callback, lua.LNil, "test_script.lua")
+	timerID := timer.RegisterTimer(10.0, callback, lua.LNil, script)
 
 	// Unregister the timer
 	success := timer.UnregisterTimer(timerID)
@@ -94,8 +105,10 @@ func TestTimerExecution(t *testing.T) {
 		return 0
 	})
 
+	script := setupTestScript(t)
+
 	// Register a timer with short duration
-	_ = engine.timer.RegisterTimer(0.1, callback, lua.LNil, "test_script.lua")
+	_ = engine.timer.RegisterTimer(0.1, callback, lua.LNil, script)
 
 	// Wait for timer to execute
 	time.Sleep(200 * time.Millisecond)
@@ -139,8 +152,10 @@ func TestTimerDataPassing(t *testing.T) {
 		return 0
 	})
 
+	script := setupTestScript(t)
+
 	// Register a timer with data
-	_ = engine.timer.RegisterTimer(0.1, callback, testData, "test_script.lua")
+	_ = engine.timer.RegisterTimer(0.1, callback, testData, script)
 
 	// Wait for timer to execute
 	time.Sleep(200 * time.Millisecond)
@@ -162,10 +177,14 @@ func TestTimerStopAll(t *testing.T) {
 		return 0
 	})
 
+	script1 := setupTestScript(t)
+	script2 := setupTestScript(t)
+	script3 := setupTestScript(t)
+
 	// Register multiple timers
-	timer1 := timer.RegisterTimer(10.0, callback, lua.LNil, "test_script1.lua")
-	timer2 := timer.RegisterTimer(10.0, callback, lua.LNil, "test_script2.lua")
-	timer3 := timer.RegisterTimer(10.0, callback, lua.LNil, "test_script3.lua")
+	timer1 := timer.RegisterTimer(10.0, callback, lua.LNil, script1)
+	timer2 := timer.RegisterTimer(10.0, callback, lua.LNil, script2)
+	timer3 := timer.RegisterTimer(10.0, callback, lua.LNil, script3)
 
 	// Check that all timers are active
 	if timer.GetTimerCount() != 3 {
@@ -211,8 +230,10 @@ func TestRepeatingTimer(t *testing.T) {
 		return 0
 	})
 
+	script := setupTestScript(t)
+
 	// Register a repeating timer with short duration
-	timerID := engine.timer.RegisterRepeatingTimer(0.1, callback, lua.LNil, "test_script.lua")
+	timerID := engine.timer.RegisterRepeatingTimer(0.1, callback, lua.LNil, script)
 
 	// Wait for multiple executions
 	time.Sleep(500 * time.Millisecond)

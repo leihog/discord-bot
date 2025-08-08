@@ -3,8 +3,6 @@ package lua
 import (
 	"context"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -15,17 +13,12 @@ import (
 	"github.com/leihog/discord-bot/internal/database"
 )
 
+// todo optimize the way we handle hooks. I'm not entirely happy with the current implementation.
+
 // HookInfo contains information about a registered hook
 type HookInfo struct {
 	Function lua.LValue
-	Script   string
-}
-
-// LuaEvent represents an event to be processed by the Lua engine
-type LuaEvent struct {
-	Hook      HookInfo
-	Data      lua.LValue
-	EventType string // "message", "timer", etc.
+	Script   *LuaScript
 }
 
 // Command represents a scripted Bot command
@@ -40,17 +33,17 @@ type Command struct {
 
 // Engine manages the Lua scripting environment
 type Engine struct {
-	state                 *lua.LState
-	db                    *database.DB
-	session               *discordgo.Session
-	hookMutex             sync.Mutex
-	onChannelMessageHooks []HookInfo
-	onDirectMessageHooks  []HookInfo
-	onShutdownHooks       []HookInfo
-	currentScript         string // Track the currently executing script
+	state     *lua.LState
+	db        *database.DB
+	session   *discordgo.Session
+	hookMutex sync.Mutex
+	hooks     map[string][]HookInfo
+
+	scripts       map[string]*LuaScript
+	currentScript *LuaScript
 
 	// Event queue system
-	eventQueue   chan LuaEvent
+	eventQueue   chan Event
 	ctx          context.Context
 	cancel       context.CancelFunc
 	dispatcherWg sync.WaitGroup
@@ -73,9 +66,12 @@ func New(db *database.DB, session *discordgo.Session) *Engine {
 		state:      lua.NewState(),
 		db:         db,
 		session:    session,
-		eventQueue: make(chan LuaEvent, 200), // Buffer for 200 events
+		eventQueue: make(chan Event, 200), // Buffer for 200 events
+		hooks:      make(map[string][]HookInfo),
 		commands:   make(map[string]*Command),
+		scripts:    make(map[string]*LuaScript),
 	}
+	//engine.scriptManager = NewScriptManager(engine)
 	engine.timer = NewTimer(engine)
 	return engine
 }
@@ -92,109 +88,39 @@ func (e *Engine) Start(ctx context.Context) {
 	go e.dispatcher()
 }
 
+// callLuaFunction calls a Lua function with the given data
+func (e *Engine) callLuaFunction(fn HookInfo, data lua.LValue) {
+	e.currentScript = fn.Script
+	defer func() { e.currentScript = nil }()
+
+	if err := e.state.CallByParam(lua.P{
+		Fn:      fn.Function,
+		NRet:    0,
+		Protect: true,
+	}, data); err != nil {
+		log.Printf("Lua error in script '%s': %v", fn.Script.Name, err)
+	}
+}
+
 // dispatcher runs the main Lua event processing loop
 func (e *Engine) dispatcher() {
 	defer e.dispatcherWg.Done()
 
 	for event := range e.eventQueue {
-		e.processEvent(event)
+		event.Dispatch(e)
 	}
 
-	log.Println("Lua event queue closed and drained")
+	log.Println("Event queue closed and drained")
 }
 
-// processEvent processes a single Lua event
-func (e *Engine) processEvent(event LuaEvent) {
-	// Set the current script for error reporting
-	e.currentScript = event.Hook.Script
-
-	// Execute the hook function
-	if err := e.state.CallByParam(lua.P{Fn: event.Hook.Function, NRet: 0, Protect: true}, event.Data); err != nil {
-		log.Printf("Lua hook error in script '%s': %v", event.Hook.Script, err)
-	}
-
-	// Clear the current script
-	e.currentScript = ""
-}
-
-// LoadScripts loads all Lua scripts from the given directory
-func (e *Engine) LoadScripts(dir string) {
-	files, err := os.ReadDir(dir)
-	if err != nil {
-		log.Println("Failed to read script directory:", err)
-		return
-	}
-
-	// Clear existing hooks
-	e.hookMutex.Lock()
-	// reusing the slices by using e.onChannelMessageHooks[:0] might be slightly more performant when the scripts are reloaded often
-	// but now while the hooks are changing so much this is more performant since the memory is freed.
-	e.onChannelMessageHooks = nil
-	e.onDirectMessageHooks = nil
-	e.onShutdownHooks = nil
-	e.hookMutex.Unlock()
-
-	e.cmdMutex.Lock()
-	e.commands = make(map[string]*Command)
-	e.cmdMutex.Unlock()
-
-	for _, f := range files {
-		if filepath.Ext(f.Name()) != ".lua" {
-			continue
-		}
-
-		scriptPath := filepath.Join(dir, f.Name())
-		code, err := os.ReadFile(scriptPath)
-		if err != nil {
-			log.Println("Failed to read script", f.Name(), ":", err)
-			continue
-		}
-
-		// Create a new environment for this script
-		env := e.state.NewTable()
-
-		mt := e.state.NewTable()
-		mt.RawSetString("__index", e.state.Get(lua.GlobalsIndex))
-		e.state.SetMetatable(env, mt)
-
-		// Load and run the script in its environment
-		fn, err := e.state.LoadString(string(code))
-		if err != nil {
-			log.Println("Failed to compile script", f.Name(), ":", err)
-			continue
-		}
-
-		// Track the current script being executed
-		e.currentScript = f.Name()
-
-		e.state.Push(fn)
-		e.state.Push(env)
-		if err := e.state.PCall(1, lua.MultRet, nil); err != nil {
-			log.Println("Failed to run script", f.Name(), ":", err)
-		}
-
-		// Clear the current script after execution
-		e.currentScript = ""
-	}
-}
-
-func (e *Engine) enqueueLuaEvent(event LuaEvent, source string) {
-	// Check if we're shutting down and this isn't a shutdown event
-	e.shutdownMutex.RLock()
-	if e.isShuttingDown && event.EventType != "shutdown" {
-		e.shutdownMutex.RUnlock()
-		log.Printf("Dropping %s event from '%s' - engine is shutting down", event.EventType, source)
-		return
-	}
-	e.shutdownMutex.RUnlock()
-
+func (e *Engine) enqueueEvent(event Event, source string) {
 	select {
 	case e.eventQueue <- event:
 		// Event queued successfully
 	// todo test using timeout
 	// case <-time.After(100 * time.Millisecond): // we could use this to drop events if the queue is still full after 100ms
 	default:
-		log.Printf("Warning: Lua event queue full, dropping %s event from '%s'", event.EventType, source)
+		log.Printf("Warning: Lua event queue full, dropping %s event from '%s'", event.Type(), source)
 	}
 }
 
@@ -204,26 +130,19 @@ func (e *Engine) enqueueMessageHooks(m *discordgo.MessageCreate) {
 	data.RawSetString("channel_id", lua.LString(m.ChannelID))
 	data.RawSetString("author", lua.LString(m.Author.Username))
 
-	e.hookMutex.Lock()
-	defer e.hookMutex.Unlock()
-
-	var hooks []HookInfo
+	var eventType string
 	if m.GuildID == "" {
-		hooks = e.onDirectMessageHooks
+		eventType = "on_direct_message"
 	} else {
-		hooks = e.onChannelMessageHooks
+		eventType = "on_channel_message"
 	}
 
-	// Enqueue events instead of executing directly
-	for _, hook := range hooks {
-		event := LuaEvent{
-			Hook:      hook,
-			Data:      data,
-			EventType: "message",
-		}
-
-		e.enqueueLuaEvent(event, hook.Script)
+	event := BotEvent{
+		Data:      data,
+		EventType: eventType,
 	}
+
+	e.enqueueEvent(event, m.Author.Username)
 }
 
 func (e *Engine) tryHandleCommand(content string, m *discordgo.MessageCreate) bool {
@@ -260,13 +179,13 @@ func (e *Engine) tryHandleCommand(content string, m *discordgo.MessageCreate) bo
 	data.RawSetString("channel_id", lua.LString(m.ChannelID))
 	data.RawSetString("author", lua.LString(m.Author.Username))
 
-	event := LuaEvent{
-		Hook:      cmd.Callback,
-		Data:      data,
-		EventType: "command",
+	event := CommandEvent{
+		CommandName: commandName,
+		CommandData: data,
+		Callback:    cmd.Callback,
 	}
 
-	e.enqueueLuaEvent(event, m.Author.Username)
+	e.enqueueEvent(event, m.Author.Username)
 	return true
 }
 
@@ -309,22 +228,22 @@ func (e *Engine) Close() {
 	data := e.state.NewTable()
 	data.RawSetString("reason", lua.LString("graceful_shutdown"))
 
-	// Trigger shutdown hooks
-	e.hookMutex.Lock()
-	for _, hook := range e.onShutdownHooks {
-		event := LuaEvent{
-			Hook:      hook,
-			Data:      data,
-			EventType: "shutdown",
-		}
-		e.enqueueLuaEvent(event, hook.Script)
+	// Enqueue shutdown event
+	event := BotEvent{
+		Data:      data,
+		EventType: "on_shutdown",
 	}
-	e.hookMutex.Unlock()
+	e.enqueueEvent(event, "shutdown")
 
-	log.Println("Shutdown events queued, waiting for event queue to drain...")
+	log.Println("Waiting for event queue to drain...")
 
 	close(e.eventQueue) // stop accepting new events and drain the queue
 	e.dispatcherWg.Wait()
+
+	// unload all scripts
+	for name := range e.scripts {
+		e.unloadScript(name)
+	}
 
 	if e.state != nil {
 		e.state.Close()

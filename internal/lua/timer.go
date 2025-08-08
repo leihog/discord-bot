@@ -14,7 +14,7 @@ type TimerEntry struct {
 	Duration  time.Duration
 	Callback  lua.LValue
 	Data      lua.LValue
-	Script    string
+	Script    *LuaScript
 	Timer     *time.Timer
 	Active    bool
 	Repeating bool
@@ -36,17 +36,17 @@ func NewTimer(engine *Engine) *Timer {
 }
 
 // RegisterTimer registers a new timer
-func (t *Timer) RegisterTimer(seconds float64, callback lua.LValue, data lua.LValue, script string) string {
+func (t *Timer) RegisterTimer(seconds float64, callback lua.LValue, data lua.LValue, script *LuaScript) string {
 	return t.registerTimer(seconds, callback, data, script, false)
 }
 
 // RegisterRepeatingTimer registers a new repeating timer
-func (t *Timer) RegisterRepeatingTimer(seconds float64, callback lua.LValue, data lua.LValue, script string) string {
+func (t *Timer) RegisterRepeatingTimer(seconds float64, callback lua.LValue, data lua.LValue, script *LuaScript) string {
 	return t.registerTimer(seconds, callback, data, script, true)
 }
 
 // registerTimer registers a new timer (internal function)
-func (t *Timer) registerTimer(seconds float64, callback lua.LValue, data lua.LValue, script string, repeating bool) string {
+func (t *Timer) registerTimer(seconds float64, callback lua.LValue, data lua.LValue, script *LuaScript, repeating bool) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -77,7 +77,7 @@ func (t *Timer) registerTimer(seconds float64, callback lua.LValue, data lua.LVa
 	if repeating {
 		timerType = "repeating"
 	}
-	log.Printf("Registered %s timer '%s' for script '%s' (%.2f seconds)", timerType, timerID, script, seconds)
+	log.Printf("Registered %s timer '%s' for script '%s' (%.2f seconds)", timerType, timerID, script.Name, seconds)
 	return timerID
 }
 
@@ -100,8 +100,25 @@ func (t *Timer) UnregisterTimer(timerID string) bool {
 	// Remove from map
 	delete(t.timers, timerID)
 
-	log.Printf("Unregistered timer '%s' from script '%s'", timerID, entry.Script)
+	log.Printf("Unregistered timer '%s' from script '%s'", timerID, entry.Script.Name)
 	return true
+}
+
+// Removes any pending timers registered by a script
+func (t *Timer) UnregisterScriptTimers(scriptName string) {
+	// it's necessary to fetch the timers in a separate lock to avoid deadlocks
+	t.mu.Lock()
+	var targetTimers []string
+	for timerID, entry := range t.timers {
+		if entry.Script.Name == scriptName {
+			targetTimers = append(targetTimers, timerID)
+		}
+	}
+	t.mu.Unlock()
+
+	for _, timerID := range targetTimers {
+		t.UnregisterTimer(timerID)
+	}
 }
 
 // executeTimer executes a timer callback
@@ -120,21 +137,21 @@ func (t *Timer) executeTimer(timerID string) {
 	t.mu.Unlock()
 
 	// Create event for the timer callback
-	event := LuaEvent{
-		Hook: HookInfo{
+	event := TimerEvent{
+		TimerID: timerID,
+		Callback: HookInfo{
 			Function: entry.Callback,
 			Script:   entry.Script,
 		},
-		Data:      entry.Data,
-		EventType: "timer",
+		TimerData: entry.Data,
 	}
 
 	// Enqueue the timer event
 	select {
 	case t.engine.eventQueue <- event:
-		log.Printf("Timer '%s' from script '%s' executed", timerID, entry.Script)
+		log.Printf("Timer '%s' from script '%s' executed", timerID, entry.Script.Name)
 	default:
-		log.Printf("Warning: Could not enqueue timer '%s' from script '%s' - queue full", timerID, entry.Script)
+		log.Printf("Warning: Could not enqueue timer '%s' from script '%s' - queue full", timerID, entry.Script.Name)
 	}
 
 	// Handle repeating timers
@@ -146,7 +163,7 @@ func (t *Timer) executeTimer(timerID string) {
 		})
 		entry.Active = true
 		t.mu.Unlock()
-		log.Printf("Re-registered repeating timer '%s' from script '%s'", timerID, entry.Script)
+		log.Printf("Re-registered repeating timer '%s' from script '%s'", timerID, entry.Script.Name)
 	} else {
 		// Remove the timer from the map since it's completed (one-shot)
 		t.mu.Lock()
@@ -192,7 +209,7 @@ func (t *Timer) StopAll() {
 		if entry.Active && entry.Timer != nil {
 			entry.Timer.Stop()
 			entry.Active = false
-			log.Printf("Stopped timer '%s' from script '%s'", timerID, entry.Script)
+			log.Printf("Stopped timer '%s' from script '%s'", timerID, entry.Script.Name)
 		}
 		// Remove from map
 		delete(t.timers, timerID)
