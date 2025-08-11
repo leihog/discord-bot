@@ -15,7 +15,7 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		BotToken:     os.Getenv("DISCORD_BOT_TOKEN"),
-		ScriptsDir:   "lua/scripts",
+		ScriptsDir:   "scripts",
 		DatabasePath: "bot_data.db",
 	}
 }
