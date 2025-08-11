@@ -31,7 +31,7 @@ func TestJsonEncodeBasic(t *testing.T) {
 	if jsonStr, ok := result.(lua.LString); !ok {
 		t.Errorf("Expected string, got %T", result)
 	} else {
-		expected := `{"active":"true","name":"test","value":"42"}`
+		expected := `{"active":true,"name":"test","value":42}`
 		if jsonStr.String() != expected {
 			t.Errorf("Expected %s, got %s", expected, jsonStr.String())
 		}

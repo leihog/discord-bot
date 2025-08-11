@@ -94,8 +94,20 @@ func luaTableToMap(tbl *lua.LTable) map[string]any {
 		switch v := value.(type) {
 		case *lua.LTable:
 			result[k] = luaTableToMap(v)
+		case lua.LNumber:
+			result[k] = float64(v)
+		case lua.LString:
+			result[k] = string(v)
+		case lua.LBool:
+			result[k] = bool(v)
 		default:
-			result[k] = v.String()
+			// Check for nil value
+			if value == lua.LNil {
+				result[k] = nil
+			} else {
+				// Fallback to string for any other types
+				result[k] = v.String()
+			}
 		}
 	})
 	return result

@@ -272,3 +272,50 @@ func TestStoreGetAllEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestLuaTableToMapPreservesNumbers(t *testing.T) {
+	db := setupTestDB(t)
+	_ = New(db, nil) // Create engine but don't use it
+
+	// Create a Lua table with numbers
+	L := lua.NewState()
+	defer L.Close()
+
+	table := L.NewTable()
+	table.RawSetString("messages", lua.LNumber(42))
+	table.RawSetString("users", lua.LNumber(10))
+	table.RawSetString("active", lua.LBool(true))
+	table.RawSetString("name", lua.LString("test"))
+
+	// Convert to Go map
+	result := luaTableToMap(table)
+
+	// Verify that numbers are preserved as float64, not strings
+	if messages, ok := result["messages"].(float64); !ok {
+		t.Errorf("Expected messages to be float64, got %T: %v", result["messages"], result["messages"])
+	} else if messages != 42.0 {
+		t.Errorf("Expected messages to be 42.0, got %v", messages)
+	}
+
+	if users, ok := result["users"].(float64); !ok {
+		t.Errorf("Expected users to be float64, got %T: %v", result["users"], result["users"])
+	} else if users != 10.0 {
+		t.Errorf("Expected users to be 10.0, got %v", users)
+	}
+
+	// Verify that booleans are preserved
+	if active, ok := result["active"].(bool); !ok {
+		t.Errorf("Expected active to be bool, got %T: %v", result["active"], result["active"])
+	} else if !active {
+		t.Errorf("Expected active to be true, got %v", active)
+	}
+
+	// Verify that strings are preserved
+	if name, ok := result["name"].(string); !ok {
+		t.Errorf("Expected name to be string, got %T: %v", result["name"], result["name"])
+	} else if name != "test" {
+		t.Errorf("Expected name to be 'test', got '%s'", name)
+	}
+
+	t.Log("Number preservation test passed!")
+}
