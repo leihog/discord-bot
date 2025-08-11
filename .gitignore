@@ -1,4 +1,5 @@
 go.sum
 bin/
 *.log
-
+bot_data.db
+discord-bot
