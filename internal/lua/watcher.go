@@ -3,6 +3,8 @@ package lua
 import (
 	"context"
 	"log"
+	"path/filepath"
+	"strings"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -40,6 +42,11 @@ func (w *Watcher) Start(ctx context.Context) {
 					return
 				}
 
+				// Only process .lua files and ignore files starting with '.'
+				if !w.shouldProcessFile(event.Name) {
+					continue
+				}
+
 				// todo: handle removed/deleted files
 
 				log.Println("File watcher event:", event)
@@ -73,4 +80,14 @@ func (w *Watcher) Start(ctx context.Context) {
 	if err := watcher.Add(w.dir); err != nil {
 		log.Println("Failed to add directory to watcher:", err)
 	}
+}
+
+// shouldProcessFile checks if a file should be processed by the watcher
+func (w *Watcher) shouldProcessFile(filename string) bool {
+	base := filepath.Base(filename)
+	if !strings.HasPrefix(base, ".") && filepath.Ext(base) == ".lua" {
+		// it's a non-hidden .lua file
+		return true
+	}
+	return false
 }
