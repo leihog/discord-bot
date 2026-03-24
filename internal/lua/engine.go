@@ -129,6 +129,7 @@ func (e *Engine) enqueueMessageHooks(m *discordgo.MessageCreate) {
 	data.RawSetString("content", lua.LString(m.Content))
 	data.RawSetString("channel_id", lua.LString(m.ChannelID))
 	data.RawSetString("author", lua.LString(m.Author.Username))
+	data.RawSetString("author_id", lua.LString(m.Author.ID))
 
 	var eventType string
 	if m.GuildID == "" {
@@ -178,6 +179,7 @@ func (e *Engine) tryHandleCommand(content string, m *discordgo.MessageCreate) bo
 	data.RawSetString("args", args)
 	data.RawSetString("channel_id", lua.LString(m.ChannelID))
 	data.RawSetString("author", lua.LString(m.Author.Username))
+	data.RawSetString("author_id", lua.LString(m.Author.ID))
 
 	event := CommandEvent{
 		CommandName: commandName,
