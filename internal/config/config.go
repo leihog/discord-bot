@@ -15,9 +15,16 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		BotToken:     os.Getenv("DISCORD_BOT_TOKEN"),
-		ScriptsDir:   "scripts",
-		DatabasePath: "bot_data.db",
+		ScriptsDir:   getenvOrDefault("SCRIPTS_DIR", "scripts"),
+		DatabasePath: getenvOrDefault("DATABASE_PATH", "data/bot.db"),
 	}
+}
+
+func getenvOrDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }
 
 // Validate checks if the configuration is valid
