@@ -18,23 +18,28 @@ A scriptable Discord bot built in Go with Lua scripting support.
 ```
 discord-bot/
 ├── cmd/
-│   └── bot/
-│       └── main.go          # Entry point
+│   ├── bot/
+│   │   └── main.go          # Bot entry point
+│   └── dev/
+│       └── main.go          # Dev shell entry point
 ├── internal/
 │   ├── bot/                 # Bot lifecycle management
 │   ├── config/              # Configuration management
 │   ├── database/            # Database connection
 │   └── lua/                 # Lua scripting engine
 │   └── utils/               # misc utility functions
-├── lua/
-│   └── scripts/             # Lua scripts
+├── scripts/                 # Lua scripts
 └── go.mod
 ```
 
 ## Building
 
 ```bash
-go build -o discord-bot cmd/bot/main.go
+# Production bot
+go build -o discord-bot ./cmd/bot
+
+# Dev shell
+go build -o discord-dev ./cmd/dev
 ```
 
 ## Running
@@ -44,6 +49,43 @@ go build -o discord-bot cmd/bot/main.go
    ```bash
    ./discord-bot
    ```
+
+## Dev Shell
+
+The dev shell lets you interact with the Lua scripting engine locally without a real Discord connection. It provides a terminal TUI with a scrollable output viewport and an interactive prompt.
+
+```bash
+./discord-dev --scripts-dir scripts --db :memory:
+```
+
+```
+┌──────────────────────────────────┐
+│  Script loaded: jokes.lua        │
+│  [Bot → #dev-channel]: Pong!     │
+│  ...                             │
+├──────────────────────────────────┤
+│  [#dev-channel] dev> █           │
+└──────────────────────────────────┘
+```
+
+Bot replies and log output appear in the viewport asynchronously without corrupting the input prompt. Mouse-wheel scrolling is supported.
+
+### Dev shell commands
+
+| Command | Description |
+|---|---|
+| `/channel <id>` | Switch active channel ID |
+| `/user <name> [id]` | Change the simulated author name and optional ID |
+| `/dm` | Toggle DM mode (`on_direct_message` vs `on_channel_message`) |
+| `/scripts` | List loaded scripts |
+| `/reload <name>` | Reload a script by name (e.g. `jokes.lua`) |
+| `/commands` | List registered bot commands |
+| `/hooks` | List registered hooks and which scripts own them |
+| `/lua <code>` | Execute a Lua snippet and print the result |
+| `/quit`, `/exit` | Exit the dev shell |
+| `Ctrl+C` | Exit the dev shell |
+
+Any input not starting with `/` is dispatched as a message from the simulated user, triggering hooks and commands exactly as they would fire on Discord.
 
 ## Lua Scripting
 
@@ -85,6 +127,7 @@ Your callback function receives an event table with:
 - `event.args` - Table containing command arguments (index 1 is the command name)
 - `event.channel_id` - The Discord channel ID where the command was used
 - `event.author` - The username of the person who used the command
+- `event.author_id` - The ID of the person who triggered the command
 
 #### Example Command
 
@@ -161,7 +204,8 @@ Outside of getting triggered by commands, scripts can also trigger on various Bo
 - `on_shutdown` - Triggered when the bot is shutting down gracefully
 - `on_unload`- Triggered when the script is unloaded
 
-### Example Script
+
+#### Example Script
 
 ```lua
 register_hook("on_channel_message", function(event)
@@ -171,6 +215,14 @@ register_hook("on_channel_message", function(event)
 end)
 ```
 
+#### Event data
+
+A registered hook callback function receives an event table with:
+- `event.content` - A string containing a recieved discord message
+- `event.channel_id` - The Discord channel ID where the event took place
+- `event.author` - The username of the person who triggered the event
+- `event.author_id` - The ID of the person who triggered the event
+
 ### Notes and considerations
 
 - On bot shutdown, all queued timers are cleared without firing.
@@ -178,9 +230,13 @@ end)
 
 ## Configuration
 
-The bot uses environment variables for configuration:
+The bot is configured via environment variables:
 
-- `DISCORD_BOT_TOKEN` - Discord bot token (required)
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DISCORD_BOT_TOKEN` | Yes | — | Discord bot token |
+| `SCRIPTS_DIR` | No | `scripts` | Directory containing Lua scripts |
+| `DATABASE_PATH` | No | `data/bot.db` | SQLite database path |
 
 ## Development
 
@@ -195,3 +251,5 @@ The bot uses environment variables for configuration:
 1. Create a new module in `internal/` if needed
 2. Add the feature to the appropriate existing module
 3. Update the bot initialization in `internal/bot/bot.go` if necessary
+
+

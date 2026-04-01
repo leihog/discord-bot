@@ -215,6 +215,32 @@ func (e *Engine) registerFunctions() {
 		return 1
 	}))
 
+	// http_get_async function — returns immediately; callback(result) is called
+	// from the dispatcher goroutine once the request completes.
+	e.state.SetGlobal("http_get_async", e.state.NewFunction(func(L *lua.LState) int {
+		url := L.CheckString(1)
+		var options *lua.LTable
+		if L.GetTop() > 2 {
+			options = L.CheckTable(2)
+		}
+		callback := L.CheckFunction(L.GetTop())
+
+		// Parse options and capture callback on the dispatcher goroutine before
+		// spawning — after this point we must not touch LState.
+		opts := parseHTTPOptions(options)
+		hook := HookInfo{Function: callback, Script: e.currentScript}
+		ctx := e.ctx
+
+		e.inflightWg.Add(1)
+		go func() {
+			defer e.inflightWg.Done()
+			result := doHTTPGet(ctx, url, opts)
+			e.enqueueEvent(AsyncHTTPEvent{Callback: hook, Result: result}, "http_get_async")
+		}()
+
+		return 0
+	}))
+
 	// http_post function
 	e.state.SetGlobal("http_post", e.state.NewFunction(func(L *lua.LState) int {
 		url := L.CheckString(1)
@@ -232,6 +258,31 @@ func (e *Engine) registerFunctions() {
 			L.Push(result)
 		}
 		return 1
+	}))
+
+	// http_post_async function — returns immediately; callback(result) is called
+	// from the dispatcher goroutine once the request completes.
+	e.state.SetGlobal("http_post_async", e.state.NewFunction(func(L *lua.LState) int {
+		url := L.CheckString(1)
+		body := L.CheckString(2)
+		var options *lua.LTable
+		if L.GetTop() > 3 {
+			options = L.CheckTable(3)
+		}
+		callback := L.CheckFunction(L.GetTop())
+
+		opts := parseHTTPOptions(options)
+		hook := HookInfo{Function: callback, Script: e.currentScript}
+		ctx := e.ctx
+
+		e.inflightWg.Add(1)
+		go func() {
+			defer e.inflightWg.Done()
+			result := doHTTPPost(ctx, url, body, opts)
+			e.enqueueEvent(AsyncHTTPEvent{Callback: hook, Result: result}, "http_post_async")
+		}()
+
+		return 0
 	}))
 
 	// json_encode function

@@ -29,7 +29,14 @@ func New(dbPath string) (*DB, error) {
 
 // Initialize sets up the database schema
 func (db *DB) Initialize() error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS kv_store (
+	log.Println("Initializing database")
+
+	_, err := db.Exec(`PRAGMA journal_mode=WAL;`)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS kv_store (
 		namespace TEXT NOT NULL,
 		key TEXT NOT NULL,
 		value TEXT,

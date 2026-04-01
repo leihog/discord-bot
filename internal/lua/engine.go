@@ -2,6 +2,7 @@ package lua
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -14,6 +15,11 @@ import (
 )
 
 // todo optimize the way we handle hooks. I'm not entirely happy with the current implementation.
+
+// MessageSender is satisfied by *discordgo.Session and by the dev shell mock.
+type MessageSender interface {
+	ChannelMessageSend(channelID, content string, options ...discordgo.RequestOption) (*discordgo.Message, error)
+}
 
 // HookInfo contains information about a registered hook
 type HookInfo struct {
@@ -35,7 +41,7 @@ type Command struct {
 type Engine struct {
 	state     *lua.LState
 	db        *database.DB
-	session   *discordgo.Session
+	session   MessageSender
 	hookMutex sync.Mutex
 	hooks     map[string][]HookInfo
 
@@ -55,13 +61,16 @@ type Engine struct {
 	commands map[string]*Command
 	cmdMutex sync.Mutex
 
+	// In-flight async operations (e.g. HTTP requests)
+	inflightWg sync.WaitGroup
+
 	// Shutdown state
 	shutdownMutex  sync.RWMutex
 	isShuttingDown bool
 }
 
 // New creates a new Lua engine
-func New(db *database.DB, session *discordgo.Session) *Engine {
+func New(db *database.DB, session MessageSender) *Engine {
 	engine := &Engine{
 		state:      lua.NewState(),
 		db:         db,
@@ -224,6 +233,10 @@ func (e *Engine) Close() {
 		e.timer.StopAll()
 	}
 
+	// Wait for any in-flight async operations (e.g. HTTP requests) to finish.
+	// e.ctx is already cancelled at this point, so they should return quickly.
+	e.inflightWg.Wait()
+
 	log.Println("Triggering shutdown events in Lua scripts...")
 
 	// Create shutdown event data
@@ -257,4 +270,51 @@ func (e *Engine) IsShuttingDown() bool {
 	e.shutdownMutex.RLock()
 	defer e.shutdownMutex.RUnlock()
 	return e.isShuttingDown
+}
+
+// Exec runs Lua code on the dispatcher goroutine and returns its output.
+// print() calls and return values are captured and returned as a string.
+func (e *Engine) Exec(code string) (string, error) {
+	result := make(chan ExecResult, 1)
+	e.enqueueEvent(ExecEvent{Code: code, Result: result}, "dev-shell")
+	select {
+	case r := <-result:
+		return r.Output, r.Err
+	case <-e.ctx.Done():
+		return "", fmt.Errorf("engine shutting down")
+	}
+}
+
+// GetHookNames returns a snapshot of registered hooks (hook name → script names).
+// Safe to call from any goroutine.
+func (e *Engine) GetHookNames() map[string][]string {
+	e.hookMutex.Lock()
+	defer e.hookMutex.Unlock()
+	out := make(map[string][]string, len(e.hooks))
+	for name, hooks := range e.hooks {
+		scripts := make([]string, len(hooks))
+		for i, h := range hooks {
+			scripts[i] = h.Script.Name
+		}
+		out[name] = scripts
+	}
+	return out
+}
+
+// GetScriptNames returns a snapshot of loaded script names.
+// Safe to call from any goroutine (runs via the dispatcher).
+func (e *Engine) GetScriptNames() []string {
+	result := make(chan []string, 1)
+	e.enqueueEvent(snapshotEvent{kind: "scripts", result: result}, "dev-shell")
+	select {
+	case names := <-result:
+		return names
+	case <-e.ctx.Done():
+		return nil
+	}
+}
+
+// EnqueueScriptEvent enqueues a script management event (e.g. "reload").
+func (e *Engine) EnqueueScriptEvent(scriptPath, action string) {
+	e.enqueueEvent(ScriptEvent{ScriptName: scriptPath, Action: action}, "dev-shell")
 }
