@@ -12,8 +12,7 @@ func (e *Engine) StoreSet(namespace, key string, value lua.LValue) error {
 	var valStr string
 
 	if tbl, ok := value.(*lua.LTable); ok {
-		// Convert Lua table to Go map
-		goVal := luaTableToMap(tbl)
+		goVal := luaTableToGo(tbl)
 		jsonBytes, err := json.Marshal(goVal)
 		if err != nil {
 			return err
@@ -86,31 +85,64 @@ func (e *Engine) StoreGetAll(namespace string) (lua.LValue, error) {
 	return result, nil
 }
 
-// luaTableToMap converts a Lua table to a Go map
+// luaTableToMap is a backward-compatible wrapper returning map[string]any.
+// Prefer luaTableToGo when the table may be a sequence.
 func luaTableToMap(tbl *lua.LTable) map[string]any {
-	result := make(map[string]any)
-	tbl.ForEach(func(key lua.LValue, value lua.LValue) {
-		k := key.String()
-		switch v := value.(type) {
-		case *lua.LTable:
-			result[k] = luaTableToMap(v)
-		case lua.LNumber:
-			result[k] = float64(v)
-		case lua.LString:
-			result[k] = string(v)
-		case lua.LBool:
-			result[k] = bool(v)
-		default:
-			// Check for nil value
-			if value == lua.LNil {
-				result[k] = nil
-			} else {
-				// Fallback to string for any other types
-				result[k] = v.String()
-			}
-		}
+	if m, ok := luaTableToGo(tbl).(map[string]any); ok {
+		return m
+	}
+	// Array table: fall back to string-keyed map (legacy behaviour).
+	m := make(map[string]any)
+	tbl.ForEach(func(k, v lua.LValue) {
+		m[k.String()] = luaToGo(v)
 	})
-	return result
+	return m
+}
+
+// luaToGo converts any Lua value to its Go equivalent.
+func luaToGo(value lua.LValue) any {
+	switch v := value.(type) {
+	case *lua.LTable:
+		return luaTableToGo(v)
+	case lua.LNumber:
+		return float64(v)
+	case lua.LString:
+		return string(v)
+	case lua.LBool:
+		return bool(v)
+	default:
+		if value == lua.LNil {
+			return nil
+		}
+		return v.String()
+	}
+}
+
+// luaTableToGo converts a Lua table to either a []any (sequence) or map[string]any (hash).
+// Tables whose only keys are consecutive integers starting at 1 are treated as arrays,
+// preserving round-trip fidelity through JSON so that the Lua # operator works after retrieval.
+func luaTableToGo(tbl *lua.LTable) any {
+	n := tbl.MaxN()
+	if n > 0 {
+		isSeq := true
+		tbl.ForEach(func(k, _ lua.LValue) {
+			if _, ok := k.(lua.LNumber); !ok {
+				isSeq = false
+			}
+		})
+		if isSeq {
+			arr := make([]any, n)
+			for i := 1; i <= n; i++ {
+				arr[i-1] = luaToGo(tbl.RawGetInt(i))
+			}
+			return arr
+		}
+	}
+	m := make(map[string]any)
+	tbl.ForEach(func(k, v lua.LValue) {
+		m[k.String()] = luaToGo(v)
+	})
+	return m
 }
 
 // goValueToLua converts a Go value to a Lua value with proper table reconstruction

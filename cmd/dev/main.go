@@ -131,11 +131,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.engine.ProcessMessage(buildMessage(line, &m.state))
 				}
 			}
+		case tea.KeyShiftUp:
+			m.viewport.ScrollUp(3)
+		case tea.KeyShiftDown:
+			m.viewport.ScrollDown(3)
 		default:
-			var vpCmd, inputCmd tea.Cmd
-			m.viewport, vpCmd = m.viewport.Update(msg)
+			var inputCmd tea.Cmd
 			m.input, inputCmd = m.input.Update(msg)
-			cmds = append(cmds, vpCmd, inputCmd)
+			cmds = append(cmds, inputCmd)
 		}
 
 	case botMsgEvent:
@@ -148,7 +151,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.addLine(fmt.Sprintf("Error: %v", msg.err))
 		} else if msg.output != "" {
-			for _, l := range strings.Split(msg.output, "\n") {
+			for l := range strings.SplitSeq(msg.output, "\n") {
 				if l != "" {
 					m.addLine("→ " + l)
 				}
