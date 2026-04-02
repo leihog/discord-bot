@@ -20,7 +20,10 @@ local LIVE_TTL       = 300   -- 5 minutes (last race, qualifying — more likely
 local API_BASE       = "https://api.jolpi.ca/ergast/f1/current"
 local CACHE_NS       = "f1_cache"
 local SETTINGS_NS    = "f1_settings"
-local CHECK_INTERVAL = 300   -- background check every 5 minutes
+local CHECK_FAST  =   300   --  5 min: race within ~2 hours, or waiting for results
+local CHECK_NEAR  =  1800   -- 30 min: race day, not imminent
+local CHECK_SOON  =  7200   --  2 h:   race tomorrow
+local CHECK_IDLE  = 21600   --  6 h:   race more than 2 days away
 
 local MEDAL = { [1] = "🥇", [2] = "🥈", [3] = "🥉" }
 
@@ -493,6 +496,36 @@ local function do_race_announce(channel_id)
     end)
 end
 
+-- Determine how long to wait before the next background check by reading the
+-- already-cached next-race entry from KV (no HTTP call needed).
+local function compute_interval()
+    local cached = store_get(CACHE_NS, "next_race")
+    if not cached or not cached.data then return CHECK_NEAR end
+
+    local races = cached.data.MRData
+                  and cached.data.MRData.RaceTable
+                  and cached.data.MRData.RaceTable.Races
+    if not races or not races[1] then return CHECK_NEAR end
+
+    local race  = races[1]
+    local today = utc_date()
+
+    if race.date < today then
+        -- Race date passed; poll fast until results are confirmed announced.
+        return CHECK_FAST
+    elseif race.date == today then
+        if race.time then
+            local diff = time_to_minutes(race.time) - utc_minutes_now()
+            if diff <= 120 then return CHECK_FAST end  -- within 2 hours
+        end
+        return CHECK_NEAR  -- race day but not imminent yet
+    elseif race.date <= os.date("!%Y-%m-%d", os.time() + 86400) then
+        return CHECK_SOON  -- tomorrow
+    else
+        return CHECK_IDLE  -- more than a day away
+    end
+end
+
 local function background_check()
     local channel   = get_setting("channel")
     if not channel then return end
@@ -545,4 +578,12 @@ end, 5)
 
 -- ── background timer ──────────────────────────────────────────────────────────
 
-register_timer(CHECK_INTERVAL, background_check)
+-- Self-rescheduling check: after each run, compute how long to wait based on
+-- how far away the next race is, then schedule the next run via call_later.
+local run_background_check
+run_background_check = function()
+    background_check()
+    call_later(compute_interval(), run_background_check)
+end
+
+call_later(CHECK_FAST, run_background_check)
