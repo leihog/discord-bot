@@ -8,7 +8,7 @@ import (
 
 func TestHttpGetBasic(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Test basic HTTP GET
 	result, err := engine.httpGet("https://httpbin.org/get", nil)
@@ -46,7 +46,7 @@ func TestHttpGetBasic(t *testing.T) {
 
 func TestHttpGetWithOptions(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Create options table
 	L := lua.NewState()
@@ -85,7 +85,7 @@ func TestHttpGetWithOptions(t *testing.T) {
 
 func TestHttpPostBasic(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Test basic HTTP POST
 	body := `{"test": "data"}`
@@ -119,7 +119,7 @@ func TestHttpPostBasic(t *testing.T) {
 
 func TestHttpPostWithOptions(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Create options table
 	L := lua.NewState()
@@ -159,7 +159,7 @@ func TestHttpPostWithOptions(t *testing.T) {
 
 func TestHttpGetTimeout(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Create options table with very short timeout
 	L := lua.NewState()

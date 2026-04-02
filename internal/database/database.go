@@ -46,6 +46,42 @@ func (db *DB) Initialize() error {
 		return err
 	}
 
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS users (
+		id TEXT PRIMARY KEY,
+		display_name TEXT NOT NULL,
+		created_at INTEGER NOT NULL
+	)`)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS user_roles (
+		user_id TEXT NOT NULL REFERENCES users(id),
+		role TEXT NOT NULL,
+		PRIMARY KEY (user_id, role)
+	)`)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS user_meta (
+		user_id TEXT NOT NULL REFERENCES users(id),
+		key TEXT NOT NULL,
+		value TEXT,
+		PRIMARY KEY (user_id, key)
+	)`)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS bot_config (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	)`)
+	if err != nil {
+		return err
+	}
+
 	log.Println("Database initialized successfully")
 	return nil
 }

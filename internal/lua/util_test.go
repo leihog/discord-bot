@@ -8,7 +8,7 @@ import (
 
 func TestJsonEncodeBasic(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Create a simple Lua table
 	L := lua.NewState()
@@ -40,7 +40,7 @@ func TestJsonEncodeBasic(t *testing.T) {
 
 func TestJsonEncodeComplex(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Create a complex Lua table with nested structure
 	L := lua.NewState()
@@ -85,7 +85,7 @@ func TestJsonEncodeComplex(t *testing.T) {
 
 func TestJsonDecodeBasic(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Test JSON decoding
 	jsonString := `{"name":"test","value":42,"active":true}`
@@ -116,7 +116,7 @@ func TestJsonDecodeBasic(t *testing.T) {
 
 func TestJsonDecodeComplex(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Test JSON decoding with nested structure
 	jsonString := `{"level1":"test","level2":{"nested":"value"},"number":123}`
@@ -157,7 +157,7 @@ func TestJsonDecodeComplex(t *testing.T) {
 
 func TestJsonRoundtrip(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Create a complex Lua table
 	L := lua.NewState()
@@ -198,7 +198,7 @@ func TestJsonRoundtrip(t *testing.T) {
 
 func TestJsonDecodeInvalid(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Test invalid JSON
 	invalidJson := `{"name":"test",invalid}`
@@ -214,7 +214,7 @@ func TestJsonDecodeInvalid(t *testing.T) {
 
 func TestJsonDecodeWithArrays(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Test JSON with arrays
 	jsonString := `{"name":"Bob","age":25,"skills":["python","javascript"],"numbers":[1,2,3]}`

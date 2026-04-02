@@ -11,7 +11,8 @@ A scriptable Discord bot built in Go with Lua scripting support.
 - **Modular Design**: Clean separation of concerns
 - **Error Tracking**: Script-specific error reporting with file names
 - **Thread-Safe Lua**: Single-threaded event queue ensures Lua state safety
-- **Bot Commands**: Register custom commands with optional cooldowns
+- **Bot Commands**: Register custom commands with optional cooldowns and role requirements
+- **User Management**: Automatic user tracking with bot-side roles and extensible per-user metadata
 
 ## Project Structure
 
@@ -26,7 +27,8 @@ discord-bot/
 │   ├── bot/                 # Bot lifecycle management
 │   ├── config/              # Configuration management
 │   ├── database/            # Database connection
-│   └── lua/                 # Lua scripting engine
+│   ├── lua/                 # Lua scripting engine
+│   ├── users/               # User management (roles, metadata)
 │   └── utils/               # misc utility functions
 ├── scripts/                 # Lua scripts
 └── go.mod
@@ -91,22 +93,45 @@ Any input not starting with `/` is dispatched as a message from the simulated us
 
 ### Available Functions
 
+**Messaging**
 - `send_message(channel_id, message)` - Send a message to a channel
+
+**Commands & Hooks**
 - `register_hook(hook_name, function)` - Register event handlers
-- `register_command(name, description, callback, cooldown)` - Register a bot command
+- `register_command(name, description, callback[, cooldown[, required_role]])` - Register a bot command
 - `get_commands()` - Get a table of all registered commands
+
+**Persistent Storage**
 - `store_set(namespace, key, value)` - Store persistent data
 - `store_get(namespace, key)` - Retrieve persistent data
 - `store_get_all(namespace)` - Retrieve all data from a namespace
 - `store_delete(namespace, key)` - Delete persistent data
+
+**User Management**
+- `user_ensure(id, display_name)` - Upsert a user record
+- `user_get(id)` - Get user info: `{id, display_name, roles, created_at}` or nil
+- `user_has_role(id, role)` - Check if a user has a role (returns bool)
+- `user_add_role(id, role)` - Grant a role to a user
+- `user_remove_role(id, role)` - Revoke a role from a user
+- `user_set_meta(id, key, value)` - Store arbitrary metadata for a user
+- `user_get_meta(id, key)` - Retrieve a metadata value (returns string or nil)
+- `user_get_all_meta(id)` - Get all metadata for a user as a table
+
+**HTTP**
 - `http_get(url, options)` - Perform HTTP GET request
 - `http_post(url, body, options)` - Perform HTTP POST request
+
+**JSON**
 - `json_encode(table)` - Convert Lua table to JSON string
 - `json_decode(string)` - Convert JSON string to Lua table
-- `log(message)` - Log a message to the bot's console
+
+**Timers**
 - `call_later(seconds, callback, data)` - Register a one-shot timer callback
 - `register_timer(seconds, callback, data)` - Register a repeating timer callback
 - `unregister_timer(timer_id)` - Cancel a registered timer
+
+**Utilities**
+- `log(message)` - Log a message to the bot's console
 
 ### Bot Commands
 
@@ -114,12 +139,13 @@ Commands provide a structured way to handle user interactions. Commands are trig
 
 #### Command Registration
 
-Use `register_command(name, description, callback, cooldown)` to register a new command:
+Use `register_command(name, description, callback[, cooldown[, required_role]])` to register a new command:
 
 - `name` (string): The command name (without the `!` prefix)
 - `description` (string): A description of what the command does
 - `callback` (function): The function to execute when the command is used
 - `cooldown` (number, optional): Cooldown period in seconds (default: no cooldown)
+- `required_role` (string, optional): Role the caller must have; bot replies "Permission denied." otherwise
 
 #### Command Callback Function
 
@@ -138,6 +164,11 @@ function handle_ping(event)
 end
 
 register_command("ping", "Replies with Pong!", handle_ping, 10)
+
+-- Admin-only command (no cooldown needed, so pass 0)
+register_command("kick", "Kick a user", function(event)
+    send_message(event.channel_id, "Kicking " .. (event.args[2] or "nobody"))
+end, 0, "admin")
 ```
 
 When a user types `!ping`, the bot will respond with "Pong!" and the command will be unavailable for 10 seconds for all users.
@@ -193,6 +224,49 @@ function handle_weather(event)
 end
 
 register_command("weather", "Get weather for a city", handle_weather, 60)
+```
+
+### User Management
+
+The bot automatically tracks every Discord user it sees. No registration is required — a user record is created the first time a message from that user is processed. New users are assigned the `user` role automatically.
+
+#### Roles
+
+Two built-in roles exist: `user` (all members) and `admin`. Roles are bot-side only and independent of Discord server roles.
+
+**Admin bootstrap:** On first start with no admin set, the bot generates a one-time claim token and prints it to the log:
+
+```
+[ADMIN BOOTSTRAP] No admin set. DM the bot: !claim_admin XXXXXXXX
+```
+
+Send that command to the bot in a DM to claim admin. The token is consumed on use and is not re-generated once an admin exists.
+
+#### Sharing user data between scripts
+
+Scripts can store and read arbitrary per-user metadata using `user_set_meta`/`user_get_meta`. Because these write to the database, the data is available to every script without any coupling between them.
+
+```lua
+-- In script A: record when a user last used a feature
+register_hook("on_channel_message", function(event)
+    user_set_meta(event.author_id, "last_seen", tostring(os.time()))
+end)
+
+-- In script B: read the value written by script A
+register_command("profile", "Show user profile", function(event)
+    local last = user_get_meta(event.author_id, "last_seen")
+    local msg = last and ("Last seen: " .. last) or "No activity recorded."
+    send_message(event.channel_id, msg)
+end)
+```
+
+#### Example: role-gated admin panel
+
+```lua
+register_command("admininfo", "Admin-only info", function(event)
+    local u = user_get(event.author_id)
+    send_message(event.channel_id, "Roles: " .. table.concat(u.roles, ", "))
+end, 0, "admin")
 ```
 
 ### Bot events (hooks)

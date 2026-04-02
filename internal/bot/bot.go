@@ -9,15 +9,17 @@ import (
 	"github.com/leihog/discord-bot/internal/config"
 	"github.com/leihog/discord-bot/internal/database"
 	"github.com/leihog/discord-bot/internal/lua"
+	"github.com/leihog/discord-bot/internal/users"
 )
 
 // Bot represents the Discord bot
 type Bot struct {
-	session *discordgo.Session
-	db      *database.DB
-	engine  *lua.Engine
-	watcher *lua.Watcher
-	config  *config.Config
+	session   *discordgo.Session
+	db        *database.DB
+	engine    *lua.Engine
+	watcher   *lua.Watcher
+	config    *config.Config
+	userStore *users.Store
 }
 
 // New creates a new bot instance
@@ -38,19 +40,22 @@ func New(cfg *config.Config) (*Bot, error) {
 		return nil, err
 	}
 
+	userStore := users.New(db)
+
 	// Create Lua engine
-	engine := lua.New(db, session)
+	engine := lua.New(db, session, userStore)
 	engine.Initialize()
 
 	// Create file watcher
 	watcher := lua.NewWatcher(engine, cfg.ScriptsDir)
 
 	return &Bot{
-		session: session,
-		db:      db,
-		engine:  engine,
-		watcher: watcher,
-		config:  cfg,
+		session:   session,
+		db:        db,
+		engine:    engine,
+		watcher:   watcher,
+		config:    cfg,
+		userStore: userStore,
 	}, nil
 }
 
@@ -60,11 +65,16 @@ func (b *Bot) Start(ctx context.Context) error {
 	b.session.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuilds | discordgo.IntentsDirectMessages
 
 	// Add message handler
-	b.session.AddHandler(b.onMessageCreate) // toso this should be done after LuaEngine is started
+	b.session.AddHandler(b.onMessageCreate) // todo this should be done after LuaEngine is started
 
 	// Open Discord connection
 	if err := b.session.Open(); err != nil {
 		return err
+	}
+
+	// Bootstrap admin if no admin exists yet
+	if err := b.userStore.Bootstrap(); err != nil {
+		log.Println("Warning: admin bootstrap failed:", err)
 	}
 
 	// Load initial scripts

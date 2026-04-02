@@ -66,6 +66,10 @@ func (e *Engine) registerFunctions() {
 		if L.GetTop() >= 4 {
 			commandCooldown = time.Duration(L.CheckNumber(4)) * time.Second
 		}
+		var requiredRole string
+		if L.GetTop() >= 5 {
+			requiredRole = L.CheckString(5)
+		}
 
 		// Validate command name
 		if commandName == "" {
@@ -94,13 +98,42 @@ func (e *Engine) registerFunctions() {
 				Function: commandCallback,
 				Script:   e.currentScript,
 			},
-			Cooldown: commandCooldown,
-			LastUsed: time.Time{}, // Zero time for initial state
+			Cooldown:     commandCooldown,
+			LastUsed:     time.Time{}, // Zero time for initial state
+			RequiredRole: requiredRole,
 		}
 
 		e.currentScript.Commands = append(e.currentScript.Commands, commandName)
 
 		log.Printf("Command '%s' registered by script '%s'", commandName, e.currentScript.Name)
+		return 0
+	}))
+
+	// unregister_command function
+	e.state.SetGlobal("unregister_command", e.state.NewFunction(func(L *lua.LState) int {
+		commandName := L.CheckString(1)
+
+		e.cmdMutex.Lock()
+		defer e.cmdMutex.Unlock()
+
+		cmd, exists := e.commands[commandName]
+		if !exists {
+			return 0
+		}
+
+		delete(e.commands, commandName)
+
+		// Remove from the owning script's Commands slice so script unload
+		// doesn't attempt a redundant delete.
+		script := cmd.Callback.Script
+		for i, name := range script.Commands {
+			if name == commandName {
+				script.Commands = append(script.Commands[:i], script.Commands[i+1:]...)
+				break
+			}
+		}
+
+		log.Printf("Command '%s' unregistered", commandName)
 		return 0
 	}))
 
@@ -357,6 +390,166 @@ func (e *Engine) registerFunctions() {
 
 		success := e.timer.UnregisterTimer(timerID)
 		L.Push(lua.LBool(success))
+		return 1
+	}))
+
+	if e.users == nil {
+		return
+	}
+
+	// user_ensure(id, display_name) — upsert a user record
+	e.state.SetGlobal("user_ensure", e.state.NewFunction(func(L *lua.LState) int {
+		id := L.CheckString(1)
+		displayName := L.CheckString(2)
+		if err := e.users.EnsureUser(id, displayName); err != nil {
+			log.Println("user_ensure error:", err)
+		}
+		return 0
+	}))
+
+	// user_get(id) → table{id, display_name, roles, created_at} or nil
+	e.state.SetGlobal("user_get", e.state.NewFunction(func(L *lua.LState) int {
+		id := L.CheckString(1)
+		u, err := e.users.GetUser(id)
+		if err != nil {
+			log.Println("user_get error:", err)
+			L.Push(lua.LNil)
+			return 1
+		}
+		if u == nil {
+			L.Push(lua.LNil)
+			return 1
+		}
+		tbl := L.NewTable()
+		tbl.RawSetString("id", lua.LString(u.ID))
+		tbl.RawSetString("display_name", lua.LString(u.DisplayName))
+		tbl.RawSetString("created_at", lua.LNumber(u.CreatedAt))
+		roles := L.NewTable()
+		for i, r := range u.Roles {
+			roles.RawSetInt(i+1, lua.LString(r))
+		}
+		tbl.RawSetString("roles", roles)
+		L.Push(tbl)
+		return 1
+	}))
+
+	// user_has_role(id, role) → bool
+	e.state.SetGlobal("user_has_role", e.state.NewFunction(func(L *lua.LState) int {
+		id := L.CheckString(1)
+		role := L.CheckString(2)
+		ok, err := e.users.HasRole(id, role)
+		if err != nil {
+			log.Println("user_has_role error:", err)
+			L.Push(lua.LFalse)
+			return 1
+		}
+		L.Push(lua.LBool(ok))
+		return 1
+	}))
+
+	// user_add_role(id, role)
+	e.state.SetGlobal("user_add_role", e.state.NewFunction(func(L *lua.LState) int {
+		id := L.CheckString(1)
+		role := L.CheckString(2)
+		if err := e.users.AddRole(id, role); err != nil {
+			log.Println("user_add_role error:", err)
+		}
+		return 0
+	}))
+
+	// user_remove_role(id, role)
+	e.state.SetGlobal("user_remove_role", e.state.NewFunction(func(L *lua.LState) int {
+		id := L.CheckString(1)
+		role := L.CheckString(2)
+		if err := e.users.RemoveRole(id, role); err != nil {
+			log.Println("user_remove_role error:", err)
+		}
+		return 0
+	}))
+
+	// user_set_meta(id, key, value)
+	e.state.SetGlobal("user_set_meta", e.state.NewFunction(func(L *lua.LState) int {
+		id := L.CheckString(1)
+		key := L.CheckString(2)
+		value := L.CheckString(3)
+		if err := e.users.SetMeta(id, key, value); err != nil {
+			log.Println("user_set_meta error:", err)
+		}
+		return 0
+	}))
+
+	// user_get_meta(id, key) → string or nil
+	e.state.SetGlobal("user_get_meta", e.state.NewFunction(func(L *lua.LState) int {
+		id := L.CheckString(1)
+		key := L.CheckString(2)
+		value, ok, err := e.users.GetMeta(id, key)
+		if err != nil {
+			log.Println("user_get_meta error:", err)
+			L.Push(lua.LNil)
+			return 1
+		}
+		if !ok {
+			L.Push(lua.LNil)
+			return 1
+		}
+		L.Push(lua.LString(value))
+		return 1
+	}))
+
+	// get_owner() → table{id, display_name, roles, created_at} or nil
+	e.state.SetGlobal("get_owner", e.state.NewFunction(func(L *lua.LState) int {
+		u, err := e.users.GetOwner()
+		if err != nil {
+			log.Println("get_owner error:", err)
+			L.Push(lua.LNil)
+			return 1
+		}
+		if u == nil {
+			L.Push(lua.LNil)
+			return 1
+		}
+		tbl := L.NewTable()
+		tbl.RawSetString("id", lua.LString(u.ID))
+		tbl.RawSetString("display_name", lua.LString(u.DisplayName))
+		tbl.RawSetString("created_at", lua.LNumber(u.CreatedAt))
+		roles := L.NewTable()
+		for i, r := range u.Roles {
+			roles.RawSetInt(i+1, lua.LString(r))
+		}
+		tbl.RawSetString("roles", roles)
+		L.Push(tbl)
+		return 1
+	}))
+
+	// user_claim_admin(user_id, display_name, token) → bool
+	e.state.SetGlobal("user_claim_admin", e.state.NewFunction(func(L *lua.LState) int {
+		userID := L.CheckString(1)
+		displayName := L.CheckString(2)
+		token := L.CheckString(3)
+		ok, err := e.users.ClaimAdmin(userID, displayName, token)
+		if err != nil {
+			log.Println("user_claim_admin error:", err)
+			L.Push(lua.LFalse)
+			return 1
+		}
+		L.Push(lua.LBool(ok))
+		return 1
+	}))
+
+	// user_get_all_meta(id) → table{key=value, ...}
+	e.state.SetGlobal("user_get_all_meta", e.state.NewFunction(func(L *lua.LState) int {
+		id := L.CheckString(1)
+		meta, err := e.users.GetAllMeta(id)
+		if err != nil {
+			log.Println("user_get_all_meta error:", err)
+			L.Push(lua.LNil)
+			return 1
+		}
+		tbl := L.NewTable()
+		for k, v := range meta {
+			tbl.RawSetString(k, lua.LString(v))
+		}
+		L.Push(tbl)
 		return 1
 	}))
 }

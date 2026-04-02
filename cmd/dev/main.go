@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/leihog/discord-bot/internal/database"
 	luaengine "github.com/leihog/discord-bot/internal/lua"
+	"github.com/leihog/discord-bot/internal/users"
 )
 
 // devSession implements luaengine.MessageSender; it sends bot messages into the TUI.
@@ -44,6 +45,7 @@ type execDoneEvent struct {
 	err    error
 }
 type scriptNamesEvent struct{ names []string }
+type engineReadyMsg struct{}
 
 // shellState tracks the simulated user/channel context.
 type shellState struct {
@@ -54,19 +56,21 @@ type shellState struct {
 }
 
 type model struct {
-	viewport   viewport.Model
-	input      textinput.Model
-	state      shellState
-	lines      []string
-	engine     *luaengine.Engine
-	scriptsDir string
-	cancel     context.CancelFunc
-	ready      bool
-	width      int
-	height     int
+	viewport    viewport.Model
+	input       textinput.Model
+	state       shellState
+	lines       []string
+	engine      *luaengine.Engine
+	scriptsDir  string
+	cancel      context.CancelFunc
+	ready       bool
+	engineReady bool
+	width       int
+	height      int
+	initFunc    func() tea.Msg // runs engine bootstrap + load + start
 }
 
-func newModel(engine *luaengine.Engine, scriptsDir string, cancel context.CancelFunc) model {
+func newModel(engine *luaengine.Engine, scriptsDir string, cancel context.CancelFunc, initFunc func() tea.Msg) model {
 	ti := textinput.New()
 	ti.Focus()
 
@@ -75,6 +79,7 @@ func newModel(engine *luaengine.Engine, scriptsDir string, cancel context.Cancel
 		engine:     engine,
 		scriptsDir: scriptsDir,
 		cancel:     cancel,
+		initFunc:   initFunc,
 		state: shellState{
 			author:    "dev",
 			authorID:  "dev-user",
@@ -107,11 +112,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport = viewport.New(msg.Width, msg.Height-1)
 			m.viewport.SetContent(strings.Join(m.lines, "\n"))
 			m.ready = true
+			cmds = append(cmds, m.initFunc) // start engine init now that TUI is up
 		} else {
 			m.viewport.Width = msg.Width
 			m.viewport.Height = msg.Height - 1
 		}
 		m.input.Width = msg.Width - len(m.input.Prompt)
+
+	case engineReadyMsg:
+		m.engineReady = true
 
 	case tea.KeyMsg:
 		switch msg.Type {
@@ -123,7 +132,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.SetValue("")
 			if line != "" {
 				m.addLine(fmt.Sprintf("[#%s] %s> %s", m.state.channelID, m.state.author, line))
-				if strings.HasPrefix(line, "/") {
+				if !m.engineReady {
+					m.addLine("Engine is still starting up...")
+				} else if strings.HasPrefix(line, "/") {
 					if cmd := m.handleMeta(line); cmd != nil {
 						cmds = append(cmds, cmd)
 					}
@@ -339,16 +350,27 @@ func main() {
 		log.Fatal("Failed to initialize database:", err)
 	}
 
+	userStore := users.New(db)
 	sess := &devSession{}
-	engine := luaengine.New(db, sess)
+	engine := luaengine.New(db, sess, userStore)
 	engine.Initialize()
-	engine.LoadScripts(*scriptsDir)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	engine.Start(ctx)
-	luaengine.NewWatcher(engine, *scriptsDir).Start(ctx)
 
-	m := newModel(engine, *scriptsDir, cancel)
+	// initFunc runs as a tea.Cmd (in a tea-managed goroutine) once the TUI is
+	// ready. Returning engineReadyMsg gates user input until init is complete.
+	initFunc := func() tea.Msg {
+		log.Println("Starting Bot engine...")
+		if err := userStore.Bootstrap(); err != nil {
+			log.Println("Warning: admin bootstrap failed:", err)
+		}
+		engine.LoadScripts(*scriptsDir)
+		engine.Start(ctx)
+		luaengine.NewWatcher(engine, *scriptsDir).Start(ctx)
+		return engineReadyMsg{}
+	}
+
+	m := newModel(engine, *scriptsDir, cancel, initFunc)
 	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	sess.p = p

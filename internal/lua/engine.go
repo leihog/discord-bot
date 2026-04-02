@@ -12,6 +12,7 @@ import (
 	lua "github.com/yuin/gopher-lua"
 
 	"github.com/leihog/discord-bot/internal/database"
+	"github.com/leihog/discord-bot/internal/users"
 )
 
 // todo optimize the way we handle hooks. I'm not entirely happy with the current implementation.
@@ -35,6 +36,7 @@ type Command struct {
 	Cooldown      time.Duration
 	LastUsed      time.Time // Global cooldown for the command
 	lastUsedMutex sync.RWMutex
+	RequiredRole  string // if non-empty, caller must have this role
 }
 
 // Engine manages the Lua scripting environment
@@ -42,6 +44,7 @@ type Engine struct {
 	state     *lua.LState
 	db        *database.DB
 	session   MessageSender
+	users     *users.Store
 	hookMutex sync.Mutex
 	hooks     map[string][]HookInfo
 
@@ -70,11 +73,12 @@ type Engine struct {
 }
 
 // New creates a new Lua engine
-func New(db *database.DB, session MessageSender) *Engine {
+func New(db *database.DB, session MessageSender, userStore *users.Store) *Engine {
 	engine := &Engine{
 		state:      lua.NewState(),
 		db:         db,
 		session:    session,
+		users:      userStore,
 		eventQueue: make(chan Event, 200), // Buffer for 200 events
 		hooks:      make(map[string][]HookInfo),
 		commands:   make(map[string]*Command),
@@ -175,6 +179,18 @@ func (e *Engine) tryHandleCommand(content string, m *discordgo.MessageCreate) bo
 		return true
 	}
 
+	if cmd.RequiredRole != "" && e.users != nil {
+		ok, err := e.users.HasRole(m.Author.ID, cmd.RequiredRole)
+		if err != nil {
+			log.Printf("Permission check error for command '%s': %v", commandName, err)
+			ok = false
+		}
+		if !ok {
+			_, _ = e.session.ChannelMessageSend(m.ChannelID, "Permission denied.")
+			return true
+		}
+	}
+
 	cmd.lastUsedMutex.Lock()
 	cmd.LastUsed = time.Now()
 	cmd.lastUsedMutex.Unlock()
@@ -187,6 +203,7 @@ func (e *Engine) tryHandleCommand(content string, m *discordgo.MessageCreate) bo
 	data := e.state.NewTable()
 	data.RawSetString("args", args)
 	data.RawSetString("channel_id", lua.LString(m.ChannelID))
+	data.RawSetString("guild_id", lua.LString(m.GuildID))
 	data.RawSetString("author", lua.LString(m.Author.Username))
 	data.RawSetString("author_id", lua.LString(m.Author.ID))
 
@@ -209,6 +226,12 @@ func (e *Engine) ProcessMessage(m *discordgo.MessageCreate) {
 
 	if m.Author.Bot {
 		return
+	}
+
+	if e.users != nil {
+		if err := e.users.EnsureUser(m.Author.ID, m.Author.Username); err != nil {
+			log.Printf("Warning: failed to ensure user %s: %v", m.Author.ID, err)
+		}
 	}
 
 	// Check for commands

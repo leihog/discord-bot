@@ -17,7 +17,7 @@ func setupTestScript(t *testing.T) *LuaScript {
 
 func TestTimerRegistration(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 	timer := NewTimer(engine)
 
 	// Create a test callback
@@ -53,7 +53,7 @@ func TestTimerRegistration(t *testing.T) {
 
 func TestTimerUnregistration(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 	timer := NewTimer(engine)
 
 	script := setupTestScript(t)
@@ -88,7 +88,7 @@ func TestTimerUnregistration(t *testing.T) {
 
 func TestTimerExecution(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 	engine.Initialize()
 
 	// Start the engine
@@ -125,7 +125,7 @@ func TestTimerExecution(t *testing.T) {
 
 func TestTimerDataPassing(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 	engine.Initialize()
 
 	// Start the engine
@@ -167,7 +167,7 @@ func TestTimerDataPassing(t *testing.T) {
 
 func TestTimerStopAll(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 	timer := NewTimer(engine)
 
 	// Create test callbacks
@@ -213,7 +213,7 @@ func TestTimerStopAll(t *testing.T) {
 
 func TestRepeatingTimer(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 	engine.Initialize()
 
 	// Start the engine

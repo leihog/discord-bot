@@ -31,7 +31,7 @@ func setupTestDB(t *testing.T) *database.DB {
 
 func TestStoreSetAndGetString(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Test storing and retrieving a simple string
 	err := engine.StoreSet("test", "key1", lua.LString("hello world"))
@@ -51,7 +51,7 @@ func TestStoreSetAndGetString(t *testing.T) {
 
 func TestStoreSetAndGetTable(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Create a Lua table
 	L := lua.NewState()
@@ -92,7 +92,7 @@ func TestStoreSetAndGetTable(t *testing.T) {
 
 func TestStoreSetAndGetNestedTable(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Create a nested Lua table
 	L := lua.NewState()
@@ -142,7 +142,7 @@ func TestStoreSetAndGetNestedTable(t *testing.T) {
 
 func TestStoreDelete(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Store a value
 	err := engine.StoreSet("test", "delete_key", lua.LString("to_delete"))
@@ -177,7 +177,7 @@ func TestStoreDelete(t *testing.T) {
 
 func TestStoreGetNonExistent(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Try to get a non-existent key
 	value, err := engine.StoreGet("test", "non_existent")
@@ -191,7 +191,7 @@ func TestStoreGetNonExistent(t *testing.T) {
 
 func TestStoreGetAll(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Store multiple values in the same namespace
 	err := engine.StoreSet("test_all", "key1", lua.LString("value1"))
@@ -250,7 +250,7 @@ func TestStoreGetAll(t *testing.T) {
 
 func TestStoreGetAllEmpty(t *testing.T) {
 	db := setupTestDB(t)
-	engine := New(db, nil)
+	engine := New(db, nil, nil)
 
 	// Get all values from an empty namespace
 	result, err := engine.StoreGetAll("empty_namespace")
@@ -275,7 +275,7 @@ func TestStoreGetAllEmpty(t *testing.T) {
 
 func TestLuaTableToMapPreservesNumbers(t *testing.T) {
 	db := setupTestDB(t)
-	_ = New(db, nil) // Create engine but don't use it
+	_ = New(db, nil, nil) // Create engine but don't use it
 
 	// Create a Lua table with numbers
 	L := lua.NewState()
